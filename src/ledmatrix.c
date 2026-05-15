@@ -44,8 +44,8 @@ void ledmatrix_shift_left(uint8_t num_cols) {
     /* Shift left one column at a time */
     // Direction byte: 0000UDLR
     for (uint8_t i = 0; i < num_cols; i++) {
-        spi_send_byte(CMD_SHIFT_DISPLAY);
-        spi_send_byte(0x02);  // 0b00000010
+        (void)spi_send_byte(CMD_SHIFT_DISPLAY);
+        (void)spi_send_byte(0x02);  // 0b00000010
     }
 }
 
