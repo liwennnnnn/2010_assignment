@@ -5,7 +5,6 @@
  *
  */ 
 
-
 #include <avr/io.h>
 #include "buttons.h"
 
