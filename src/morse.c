@@ -161,9 +161,14 @@ void handle_inputs(void)
         update_io_leds(0);
         update_io_leds(0);
         update_io_leds(0);
-        buttons_reset_morse();
+
         new_char = 1;
         submit_count = 1;
+        /* LED matrix */
+        char c = morse_to_char(buttons_get_morse_code());
+        buttons_clear_state();
+        draw_small_char(c, 13, COLOUR_GREEN);
+        buttons_reset_morse();  // reset morse
     } else if (submit_count == 1) {
         /* Second submit - end of word (total 5 beat gap) */
         // Add 2 more OFF beats

@@ -168,8 +168,27 @@ void draw_small_char(char character, uint8_t x_position, uint8_t colour)
 	// get one column of the character's glyph with get_small_glyph_column
 	// expand this into an array of pixel colours for that column
 	// send that to the LED matrix with ledmatrix_update_column
-	// repeat for the other two columns
+	// repeat for the other two columns (for loop)
 	// see start_splash_display for a similar, but not identical, process
+
+    uint8_t pixels[MATRIX_NUM_ROWS]; // one color per row
+
+    for (uint8_t col = 0; col < 3; col++) {
+        /* Get byte for this colum of the glyph */
+        uint8_t col_data = get_small_glyph_column(character, col);
+
+        for (uint8_t row = 0; row < MATRIX_NUM_ROWS; row++) {
+            /* Check bit of col_data */
+            if (col_data & 0x01) {
+                pixels[row] = colour;
+            } else {
+                pixels[row] = COLOUR_BLACK;
+            }
+            col_data >>= 1;
+        }
+        /* Send colum to LED matrix */
+        ledmatrix_update_column(x_position + col, pixels);
+    }
 }
 
 uint8_t get_small_glyph_column(char c, uint8_t col)
