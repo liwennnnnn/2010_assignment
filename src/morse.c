@@ -4,7 +4,7 @@
  * Main file
  *
  * Authors: Peter Sutton, Bradley Stone, Ryan Wang
- * Modified by <YOUR NAME HERE>, <YOUR STUDENT ID HERE>
+ * Modified by Tan Li Wen, 49662630
  */ 
 
 
@@ -20,6 +20,7 @@
 #include "ledmatrix.h"
 #include "display.h"
 #include "encoding.h"
+#include "buttons.h"
 
 
 /* Internal Function Declarations */
@@ -56,7 +57,7 @@ void start_splash_screen(void)
     printf("%d, Semester %s", 2026, "One");
     move_terminal_cursor(10, 12);
     // "%ld" is "long decimal", since a student number is bigger than 2**16
-    printf("By %s (%ld)", "Student Name", 48000000);
+    printf("By %s (%ld)", "Tan Li Wen", 49662630);
     
     // Wait until a button is pressed
     while(!(PINB & 0x07))
