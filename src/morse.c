@@ -131,32 +131,45 @@ void handle_inputs(void)
 
    uint8_t edge = buttons_get_rising_edge();
 
+   /* DOT — 1 beat */
    if (edge & (1<<PB0)) {
-    /* DOT — 1 beat */
     if (!new_char) {
         /* 1 OFF beat */
         update_io_leds(0);
     }
-    /* 1 ON beat */
+    // 1 ON beat
     update_io_leds(1);
+    
+    /* Display partial char */
+    uint8_t morse_code = buttons_get_morse_code();
+    char incomplete_char = morse_to_char(morse_code);
+    draw_small_char(incomplete_char, 13, COLOUR_RED);
+
     new_char = 0;
     submit_count = 0; // reset submit counter
    }
 
+   /* DASH — 3 beat */
    if (edge & (1<<PB1)) {
-    /* DASH — 3 beat */
     if (!new_char) {
-        /* 1 OFF beat */
+        // 1 OFF beat
         update_io_leds(0);
     }
-    /* 3 ON beat */
+    // 3 ON beat
     update_io_leds(1);
     update_io_leds(1);
     update_io_leds(1);
+
+    /* Display partial char */
+    uint8_t morse_code = buttons_get_morse_code();
+    char incomplete_char = morse_to_char(morse_code);
+    draw_small_char(incomplete_char, 13, COLOUR_RED);
+    
     new_char = 0;
     submit_count = 0; // reset submit counter
    }
 
+   /* SUBMIT */
    if (edge & (1<<PB2)) {
     if (submit_count == 0) {
         /* First submit - end of character (3 beat gap) */
@@ -168,7 +181,10 @@ void handle_inputs(void)
         uint8_t morse_code = buttons_get_morse_code();
         char c = morse_to_char(morse_code);
 
-        if (char_displayed > 0) {
+        if (c != '\0') {
+            /* Draw new character at right edge */
+            draw_small_char(c, 13, COLOUR_GREEN);
+
             /* Shift existing characters left by 4 columns */
             ledmatrix_shift_left(4);
 
@@ -180,9 +196,6 @@ void handle_inputs(void)
             ledmatrix_update_column(14, blank);
             ledmatrix_update_column(15, blank);
         }
-
-        /* Draw new character at right edge */
-        draw_small_char(c, 13, COLOUR_GREEN);
 
         /* Update count (cap at 4) */
         if (char_displayed < 4) {

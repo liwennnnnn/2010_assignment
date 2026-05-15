@@ -21,6 +21,7 @@
 // Colour definitions
 #define COLOUR_BLACK     0x00
 #define COLOUR_GREEN     0xF0
+#define COLOUR_RED       0x0F
 
 
 // Functions to update the display
