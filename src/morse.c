@@ -126,6 +126,8 @@ void handle_inputs(void)
     */
    static uint8_t submit_count = 0;
    static uint8_t new_char = 1;
+   // tracks the number of char currently displayed on the LED matrix
+   static uint8_t char_displayed = 0;
 
    uint8_t edge = buttons_get_rising_edge();
 
@@ -161,14 +163,36 @@ void handle_inputs(void)
         update_io_leds(0);
         update_io_leds(0);
         update_io_leds(0);
+        
+        /* LED matrix */
+        uint8_t morse_code = buttons_get_morse_code();
+        char c = morse_to_char(morse_code);
 
+        if (char_displayed > 0) {
+            /* Shift existing characters left by 4 columns */
+            ledmatrix_shift_left(4);
+
+            /* Clear the rightmost 3 columns before drawing new character */
+            // initialise array with 8 'COLOUR_BLACK'
+            uint8_t blank[MATRIX_NUM_ROWS] = {0};
+
+            ledmatrix_update_column(13, blank);
+            ledmatrix_update_column(14, blank);
+            ledmatrix_update_column(15, blank);
+        }
+
+        /* Draw new character at right edge */
+        draw_small_char(c, 13, COLOUR_GREEN);
+
+        /* Update count (cap at 4) */
+        if (char_displayed < 4) {
+            char_displayed++;
+        }
+        
+        buttons_reset_morse();  // reset morse
         new_char = 1;
         submit_count = 1;
-        /* LED matrix */
-        char c = morse_to_char(buttons_get_morse_code());
-        buttons_clear_state();
-        draw_small_char(c, 13, COLOUR_GREEN);
-        buttons_reset_morse();  // reset morse
+
     } else if (submit_count == 1) {
         /* Second submit - end of word (total 5 beat gap) */
         // Add 2 more OFF beats

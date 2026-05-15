@@ -30,4 +30,9 @@
 void ledmatrix_update_column(uint8_t x, uint8_t pixels[MATRIX_NUM_ROWS]);
 void ledmatrix_clear(void);
 
+/* Shift the entire LED matrix display left by the given number of columns.
+ *Columns shifted off the left edge are lost, and new columns on the right
+ * are filled with black pixels.*/
+void ledmatrix_shift_left(uint8_t num_cols);
+
 #endif /* LEDMATRIX_H_ */
