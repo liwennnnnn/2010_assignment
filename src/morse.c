@@ -22,6 +22,7 @@
 #include "encoding.h"
 #include "buttons.h"
 #include "timer1.h"
+#include "ssd.h"
 
 
 /* Internal Function Declarations */
@@ -33,6 +34,7 @@ void update_io_leds(void);
 static void add_beat_flush(uint8_t value);
 static void start_animation(uint8_t beats, uint8_t value);
 static void process_animation(void);
+static void update_ssd(void);
 
 /* LED history shift register */
 static uint8_t led_history = 0; // 8-bit
@@ -40,6 +42,11 @@ static uint8_t led_history = 0; // 8-bit
 /* Animtaion state */
 static uint8_t anim_beats_remaining = 0;
 static uint8_t anim_beat_value = 0;
+
+/* Track number of marks and characters */
+static uint8_t mark_count = 0;  // marks in current character
+static uint8_t char_count = 0;  // total submitted characters mod 16
+static uint8_t char_submitted = 0;
 
 
 int main(void)
@@ -57,6 +64,9 @@ void initialise_hardware(void)
 
     // Initialise timer1 for LED animation
     timer1_init();
+
+    // Initialise SSD
+    ssd_init();
 
     sei(); // enable global interrupts
 
@@ -118,6 +128,9 @@ void start_morse(void)
             timer1_fired = 0;
             process_animation();
         }
+
+        ssd_multiplex();
+        update_ssd();
     }
     // should never reach
 }
@@ -191,6 +204,24 @@ static void process_animation(void) {
     }
 }
 
+/* Update SSD */
+static void update_ssd(void)
+{
+    uint8_t right, dp;
+
+    if (mark_count == 0) {
+        right = SSD_BLANK;
+        dp = 1;
+    } else if (mark_count > 9) {
+        right = SSD_DASH;
+        dp = 0;
+    } else {
+        right = mark_count;
+        dp = 0;
+    }
+
+    ssd_display(char_count, right, dp);
+}
 
 void handle_inputs(void)
 {
@@ -232,6 +263,10 @@ void handle_inputs(void)
     draw_small_char(incomplete_char, 13, COLOUR_RED);
 
     submit_count = 0; // reset submit counter
+
+    /* Update SSD */
+    mark_count++;
+    update_ssd();
    }
 
    /* DASH — 3 beat */
@@ -258,6 +293,10 @@ void handle_inputs(void)
     draw_small_char(incomplete_char, 13, COLOUR_RED);
     
     submit_count = 0; // reset submit counter
+
+    /* Update SSD */
+    mark_count++;
+    update_ssd();
    }
 
    /* SUBMIT */
@@ -294,6 +333,11 @@ void handle_inputs(void)
         buttons_reset_morse();  // reset morse
         new_char = 1;
         submit_count = 1;
+        
+        /* Update SSD */
+        char_count = (char_count + 1) & 0x0F;   // mod 16
+        mark_count = 0; // reset mark_count
+        update_ssd();
 
     } else if (submit_count == 1) {
         /* Second submit - end of word (total 5 beat gap) */
@@ -301,6 +345,7 @@ void handle_inputs(void)
         start_animation(2, 0);
         new_char = 1;
         submit_count = 2;
+        update_ssd();
     }
   }
 }
