@@ -7,4 +7,4 @@ extern volatile uint8_t timer1_fired;
 
 void timer1_init(void);
 
-#endif
+#endif /* TIMER1_H_ */
