@@ -21,6 +21,7 @@
 #include "display.h"
 #include "encoding.h"
 #include "buttons.h"
+#include "timer1.h"
 
 
 /* Internal Function Declarations */
@@ -28,6 +29,17 @@ void initialise_hardware(void);
 void start_morse(void);
 void start_splash_screen(void);
 void handle_inputs(void);
+void update_io_leds(void);
+static void add_beat_flush(uint8_t value);
+static void start_animation(uint8_t beats, uint8_t value);
+static void process_animation(void);
+
+/* LED history shift register */
+static uint8_t led_history = 0; // 8-bit
+
+/* Animtaion state */
+static uint8_t anim_beats_remaining = 0;
+static uint8_t anim_beat_value = 0;
 
 
 int main(void)
@@ -42,6 +54,10 @@ void initialise_hardware(void)
     spi_setup_master(128); // init LED matrix
     // Setup serial port for 19200 baud communication
     init_serial_stdio(19200);
+
+    // Initialise timer1 for LED animation
+    timer1_init();
+
     sei(); // enable global interrupts
 
     // Initialise buttons
@@ -52,6 +68,10 @@ void initialise_hardware(void)
     DDRD |= 0b11111100;
     // Make port A pin 2 and 3 output (L6-L7)
     DDRA |= (1<<PA2)|(1<<PA3);
+
+    /* Ensure LEDs start OFF */
+    PORTD &= ~0b11111100;  // Clear PD2-PD7
+    PORTA &= ~((1<<PA2)|(1<<PA3));  // Clear PA2-PA3
 }
 
 void start_splash_screen(void)
@@ -92,24 +112,85 @@ void start_morse(void)
     {
         // Handle any button or key inputs
         handle_inputs();
+
+        /* Timer 0 */
+        if (timer1_fired) {
+            timer1_fired = 0;
+            process_animation();
+        }
     }
     // should never reach
 }
 
+/* Debug function to print binary representation */
+static void print_binary(uint8_t value) {
+    for (int8_t i = 7; i >= 0; i--) {
+        printf("%d", (value >> i) & 1);
+    }
+}
+
 /* Update IO board LEDs */
-static uint8_t led_history = 0; // 8-bit shift register
-
-void update_io_leds(uint8_t on) {
-    /* Shift led_history left and append new beat */
-    led_history = (led_history << 1) | (on ? 1 : 0);
-
+void update_io_leds(void) {
     /* Write to hardware */
     // L0-L5 on PD2-PD7: bits 0-5 of led_history → shift left by 2
     PORTD = (PORTD & 0x03) | ((led_history & 0x3F) << 2);
 
     // L6-L7 on PA2-PA3: bits 6-7 of led_history → shift right by 4
     PORTA = (PORTA & 0xF3) | ((led_history & 0xC0) >> 4);
+
+    // Debug print
+    printf("  LEDs: ");
+    print_binary(led_history);
+    printf(" (0x%02X)\n", led_history);
 }
+
+/* 
+ * Add a single beat and flush any pedning animation.
+ * Used when starting a completely new input
+ */
+static void add_beat_flush(uint8_t value) {
+    /* Flush pending animation */
+    if (anim_beats_remaining > 0) {
+        for (uint8_t i = 0; i < anim_beats_remaining; i++) {
+            led_history = (led_history << 1) | anim_beat_value;
+        }
+        update_io_leds();
+        anim_beats_remaining = 0;
+    }
+
+    /* Add beat */
+    led_history = (led_history << 1) | (value ? 1 : 0);
+    update_io_leds();
+}
+
+/* 
+ * Start animation for the given number of beats 
+ * Flushes any pending animation first 
+ */
+static void start_animation(uint8_t beats, uint8_t value) {
+    /* Flush pending animation */
+    if (anim_beats_remaining > 0) {
+        for (uint8_t i = 0; i < anim_beats_remaining; i++) {
+            led_history = (led_history << 1) | anim_beat_value;
+        }
+        update_io_leds();
+        anim_beats_remaining = 0;
+    }
+
+    /* Set up new animation */
+    anim_beats_remaining = beats;
+    anim_beat_value = value ? 1 : 0;
+}
+
+/* Called when timer1 fires  */
+static void process_animation(void) {
+    if (anim_beats_remaining > 0) {
+        led_history = (led_history << 1) | anim_beat_value;
+        update_io_leds();
+        anim_beats_remaining--;
+    }
+}
+
 
 void handle_inputs(void)
 {
@@ -135,17 +216,21 @@ void handle_inputs(void)
    if (edge & (1<<PB0)) {
     if (!new_char) {
         /* 1 OFF beat */
-        update_io_leds(0);
+        add_beat_flush(0);
+        start_animation(1, 1);  // animate 1 ON bit
+    } else {
+        // 1 ON beat
+        add_beat_flush(1);
+        new_char = 0;
+        /* Clear pending animation */
+        anim_beats_remaining = 0;
     }
-    // 1 ON beat
-    update_io_leds(1);
     
     /* Display partial char */
     uint8_t morse_code = buttons_get_morse_code();
     char incomplete_char = morse_to_char(morse_code);
     draw_small_char(incomplete_char, 13, COLOUR_RED);
 
-    new_char = 0;
     submit_count = 0; // reset submit counter
    }
 
@@ -153,19 +238,25 @@ void handle_inputs(void)
    if (edge & (1<<PB1)) {
     if (!new_char) {
         // 1 OFF beat
-        update_io_leds(0);
+        add_beat_flush(0);
+        // first ON beat without flush
+        add_beat_flush(1);
+
+        // remaining 2 ON beats
+        start_animation(2, 1);
+    } else {
+        // first ON beat without flush
+        add_beat_flush(1);
+        new_char = 0;
+        // remaining 2 ON beats
+        start_animation(2, 1);
     }
-    // 3 ON beat
-    update_io_leds(1);
-    update_io_leds(1);
-    update_io_leds(1);
 
     /* Display partial char */
     uint8_t morse_code = buttons_get_morse_code();
     char incomplete_char = morse_to_char(morse_code);
     draw_small_char(incomplete_char, 13, COLOUR_RED);
     
-    new_char = 0;
     submit_count = 0; // reset submit counter
    }
 
@@ -173,9 +264,7 @@ void handle_inputs(void)
    if (edge & (1<<PB2)) {
     if (submit_count == 0) {
         /* First submit - end of character (3 beat gap) */
-        update_io_leds(0);
-        update_io_leds(0);
-        update_io_leds(0);
+        start_animation(3, 0);
         
         /* LED matrix */
         uint8_t morse_code = buttons_get_morse_code();
@@ -209,8 +298,7 @@ void handle_inputs(void)
     } else if (submit_count == 1) {
         /* Second submit - end of word (total 5 beat gap) */
         // Add 2 more OFF beats
-        update_io_leds(0);
-        update_io_leds(0);
+        start_animation(2, 0);
         new_char = 1;
         submit_count = 2;
     }
