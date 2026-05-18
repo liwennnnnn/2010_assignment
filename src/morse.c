@@ -13,6 +13,7 @@
 #include <stdio.h>
 #include <avr/io.h>
 #include <avr/interrupt.h>
+#include <ctype.h>
 
 /* Internal Library Includes */
 #include "serialio.h"
@@ -46,7 +47,10 @@ static uint8_t anim_beat_value = 0;
 /* Track number of marks and characters */
 static uint8_t mark_count = 0;  // marks in current character
 static uint8_t char_count = 0;  // total submitted characters mod 16
-static uint8_t char_submitted = 0;
+
+/* Track serial terminal output */
+static uint8_t terminal_col = 0;    // current column
+static uint8_t terminal_row = 1;    // current row
 
 
 int main(void)
@@ -118,6 +122,10 @@ void start_morse(void)
     // Clear the serial terminal
     clear_terminal();
 
+    // Reset terminal track
+    terminal_col = 0;
+    terminal_row = 1;
+
     while(1)
     {
         // Handle any button or key inputs
@@ -132,13 +140,6 @@ void start_morse(void)
         ssd_multiplex();
     }
     // should never reach
-}
-
-/* Debug function to print binary representation */
-static void print_binary(uint8_t value) {
-    for (int8_t i = 7; i >= 0; i--) {
-        printf("%d", (value >> i) & 1);
-    }
 }
 
 /* Update IO board LEDs */
@@ -217,6 +218,41 @@ static void update_ssd(void)
     ssd_display(char_count, right, dp);
 }
 
+/* Serial terminal output */
+static void terminal_print_char(char c)
+{
+    move_terminal_cursor(terminal_col + 1, terminal_row);
+    printf("%c", c);
+
+    terminal_col++;
+
+    /* Wrap */
+    if (terminal_col >= 80)
+    {
+        terminal_col = 0;
+        terminal_row++;
+
+        if (terminal_row > 24)
+        {
+            terminal_row = 1;
+        }
+    }
+}
+
+static void terminal_replace_incomplete(char c)
+{
+    /* Move back one column to overwrite incomplete charater */
+    if (terminal_col > 0)
+    {
+        terminal_col--;
+    }
+
+    move_terminal_cursor(terminal_col + 1, terminal_row);
+    printf("%c", c);
+
+    terminal_col++;
+}
+
 void handle_inputs(void)
 {
     /* ******** START HERE ********
@@ -234,6 +270,40 @@ void handle_inputs(void)
    static uint8_t new_char = 1;
    // tracks the number of char currently displayed on the LED matrix
    static uint8_t char_displayed = 0;
+
+   // track if an incomplete char is shown
+   static uint8_t has_incomplete = 0;
+
+   if (serial_input_available()) {
+        /* Check serial input */
+        int ch = fgetc(stdin);   // get serial input
+
+        char c =  toupper((char) ch);
+        uint8_t pattern = char_to_morse(c);
+
+        if (pattern != 0)
+        {
+            /* Discard incomplete character */
+            buttons_reset_morse();
+            mark_count = 0;
+            has_incomplete = 0;
+            new_char = 1;
+            submit_count = 0;
+
+            /* LED matrix */
+            draw_small_char(c, 13, COLOUR_GREEN);
+            ledmatrix_shift_left(4);
+
+            uint8_t blank[MATRIX_NUM_ROWS] = {0};
+
+            ledmatrix_update_column(13, blank);
+            ledmatrix_update_column(14, blank);
+            ledmatrix_update_column(15, blank);
+
+            /* Terminal output */
+            terminal_print_char(c);
+        }
+    }   
 
    uint8_t edge = buttons_get_rising_edge();
 
@@ -261,6 +331,17 @@ void handle_inputs(void)
     /* Update SSD */
     mark_count++;
     update_ssd();
+
+    /* Serial terminal output */
+    if (has_incomplete)
+    {
+        terminal_replace_incomplete(incomplete_char);
+    } 
+    else
+    {
+        terminal_print_char(incomplete_char);
+        has_incomplete = 1;
+    }
    }
 
    /* DASH — 3 beat */
@@ -291,6 +372,17 @@ void handle_inputs(void)
     /* Update SSD */
     mark_count++;
     update_ssd();
+
+    /* Serial terminal output */
+    if (has_incomplete)
+    {
+        terminal_replace_incomplete(incomplete_char);
+    } 
+    else
+    {
+        terminal_print_char(incomplete_char);
+        has_incomplete = 1;
+    }
    }
 
    /* SUBMIT */
@@ -333,6 +425,8 @@ void handle_inputs(void)
         mark_count = 0; // reset mark_count
         update_ssd();
 
+        /* Serial terminal output */
+        has_incomplete = 0;    // reset has_incomplete
     } else if (submit_count == 1) {
         /* Second submit - end of word (total 5 beat gap) */
         // Add 2 more OFF beats
@@ -340,6 +434,10 @@ void handle_inputs(void)
         new_char = 1;
         submit_count = 2;
         update_ssd();
+
+        /* Serial terminal output */
+        terminal_print_char(' ');
+        has_incomplete = 0;    // reset has_incomplete
     }
   }
 }
