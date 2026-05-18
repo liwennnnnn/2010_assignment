@@ -19,6 +19,8 @@ void ssd_init(void);
  */
 void ssd_display(uint8_t left_digit, uint8_t right_digit, uint8_t dp_on);
 
+void ssd_multiplexer(void);
+
 
 
 #endif /* SSD_H_ */
