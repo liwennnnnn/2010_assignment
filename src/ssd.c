@@ -45,7 +45,7 @@ void ssd_display(uint8_t left_digit, uint8_t right_digit, uint8_t dp_on) {
     }
 
     if (dp_on) {
-        right_side |= SSD_DP_BIT;
+        left_side |= SSD_DP_BIT;
     }
 }
 

@@ -130,7 +130,6 @@ void start_morse(void)
         }
 
         ssd_multiplex();
-        update_ssd();
     }
     // should never reach
 }
@@ -150,11 +149,6 @@ void update_io_leds(void) {
 
     // L6-L7 on PA2-PA3: bits 6-7 of led_history → shift right by 4
     PORTA = (PORTA & 0xF3) | ((led_history & 0xC0) >> 4);
-
-    // Debug print
-    printf("  LEDs: ");
-    print_binary(led_history);
-    printf(" (0x%02X)\n", led_history);
 }
 
 /* 
@@ -211,13 +205,13 @@ static void update_ssd(void)
 
     if (mark_count == 0) {
         right = SSD_BLANK;
-        dp = 1;
+        dp = 0;
     } else if (mark_count > 9) {
         right = SSD_DASH;
-        dp = 0;
+        dp = 1;
     } else {
         right = mark_count;
-        dp = 0;
+        dp = 1;
     }
 
     ssd_display(char_count, right, dp);
