@@ -37,6 +37,18 @@ static void start_animation(uint8_t beats, uint8_t value);
 static void process_animation(void);
 static void update_ssd(void);
 
+/* Functions to handle inputs */
+static void trigger_dot(void);
+static void trigger_dash(void);
+static void trigger_submit(void);
+
+static uint8_t submit_count = 0;
+static uint8_t new_char = 1;
+// tracks the number of char currently displayed on the LED matrix
+static uint8_t char_displayed = 0;
+// track if an incomplete char is shown
+static uint8_t has_incomplete = 0;
+
 /* LED history shift register */
 static uint8_t led_history = 0; // 8-bit
 
@@ -273,62 +285,8 @@ static void terminal_replace_incomplete(char c)
     terminal_col++;
 }
 
-void handle_inputs(void)
-{
-    /* ******** START HERE ********
-    
-    Read the button. Enter a mark if there is a rising edge on b0.
-    A way to do this is to check if the previous b0 state is 0,
-    and the current b0 state is a 1.
-	(You will need to implement a method of tracking the previous b0 state.)
-	Ensure that when you press a button to exit the splash screen,
-	that this button press doesn't immediately trigger an input here.
-    
-    --. --- --- -.. / .-.. ..- -.-. -.-
-    */
-   static uint8_t submit_count = 0;
-   static uint8_t new_char = 1;
-   // tracks the number of char currently displayed on the LED matrix
-   static uint8_t char_displayed = 0;
-
-   // track if an incomplete char is shown
-   static uint8_t has_incomplete = 0;
-
-   if (serial_input_available()) {
-        /* Check serial input */
-        int ch = fgetc(stdin);   // get serial input
-
-        char c =  toupper((char) ch);
-        uint8_t pattern = char_to_morse(c);
-
-        if (pattern != 0)
-        {
-            /* Discard incomplete character */
-            buttons_reset_morse();
-            mark_count = 0;
-            has_incomplete = 0;
-            new_char = 1;
-            submit_count = 0;
-
-            /* LED matrix */
-            draw_small_char(c, 13, COLOUR_GREEN);
-            ledmatrix_shift_left(4);
-
-            uint8_t blank[MATRIX_NUM_ROWS] = {0};
-
-            ledmatrix_update_column(13, blank);
-            ledmatrix_update_column(14, blank);
-            ledmatrix_update_column(15, blank);
-
-            /* Terminal output */
-            terminal_print_char(c);
-        }
-    }   
-
-   uint8_t edge = buttons_get_rising_edge();
-
-   /* DOT — 1 beat */
-   if (edge & (1<<PB0)) {
+/* Handle DOT */
+static void trigger_dot(void) {
     if (!new_char) {
         /* 1 OFF beat */
         add_beat_flush(0);
@@ -362,10 +320,10 @@ void handle_inputs(void)
         terminal_print_char(incomplete_char);
         has_incomplete = 1;
     }
-   }
+}
 
-   /* DASH — 3 beat */
-   if (edge & (1<<PB1)) {
+/* Handle DASH */
+static void trigger_dash(void) {
     if (!new_char) {
         // 1 OFF beat
         add_beat_flush(0);
@@ -403,10 +361,10 @@ void handle_inputs(void)
         terminal_print_char(incomplete_char);
         has_incomplete = 1;
     }
-   }
+}
 
-   /* SUBMIT */
-   if (edge & (1<<PB2)) {
+/* Handle SUBMIT */
+static void trigger_submit(void) {
     if (submit_count == 0) {
         /* First submit - end of character (3 beat gap) */
         start_animation(3, 0);
@@ -451,5 +409,61 @@ void handle_inputs(void)
         terminal_print_char(' ');
         has_incomplete = 0;    // reset has_incomplete
     }
-  }
+}
+
+void handle_inputs(void)
+{
+    /* ******** START HERE ********
+    
+    Read the button. Enter a mark if there is a rising edge on b0.
+    A way to do this is to check if the previous b0 state is 0,
+    and the current b0 state is a 1.
+	(You will need to implement a method of tracking the previous b0 state.)
+	Ensure that when you press a button to exit the splash screen,
+	that this button press doesn't immediately trigger an input here.
+    
+    --. --- --- -.. / .-.. ..- -.-. -.-
+    */
+
+   if (serial_input_available()) {
+        /* Check serial input */
+        int ch = fgetc(stdin);   // get serial input
+
+        char c =  toupper((char) ch);
+        uint8_t pattern = char_to_morse(c);
+
+        if (pattern != 0)
+        {
+            /* Discard incomplete character */
+            buttons_reset_morse();
+            mark_count = 0;
+            has_incomplete = 0;
+            new_char = 1;
+            submit_count = 0;
+
+            /* LED matrix */
+            draw_small_char(c, 13, COLOUR_GREEN);
+            ledmatrix_shift_left(4);
+
+            uint8_t blank[MATRIX_NUM_ROWS] = {0};
+
+            ledmatrix_update_column(13, blank);
+            ledmatrix_update_column(14, blank);
+            ledmatrix_update_column(15, blank);
+
+            /* Terminal output */
+            terminal_print_char(c);
+        }
+    }   
+
+   uint8_t edge = buttons_get_rising_edge();
+
+   /* DOT — 1 beat */
+   if (edge & (1<<PB0)) trigger_dot();
+
+   /* DASH — 3 beat */
+   if (edge & (1<<PB1)) trigger_dash();
+
+   /* SUBMIT */
+   if (edge & (1<<PB2)) trigger_submit();
 }
