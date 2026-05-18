@@ -29,5 +29,11 @@ void buttons_reset_morse(void);
  */
 void buttons_clear_state(void);
 
+/* Called in synchronous mode to trigger dot input */
+void buttons_encode_dot(void);
+
+/* Called in synchronous mode to trigger dash input */
+void buttons_encode_dash(void);
+
 
 #endif /* BUTTONS_H_ */

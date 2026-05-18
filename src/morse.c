@@ -36,6 +36,7 @@ static void add_beat_flush(uint8_t value);
 static void start_animation(uint8_t beats, uint8_t value);
 static void process_animation(void);
 static void update_ssd(void);
+static void handle_sync_mode(void);
 
 /* Functions to handle inputs */
 static void trigger_dot(void);
@@ -66,6 +67,13 @@ static uint8_t terminal_row = 1;    // current row
 
 /* LED matrix animation state */
 static uint8_t matrix_shifts_remaining = 0;
+
+/* Synchronous mode state */
+static uint8_t sync_b0_pressed = 0;
+static uint8_t sync_press_ticks = 0;
+static uint8_t sync_release_ticks = 0;
+static uint8_t sync_submit_count = 0;
+static uint8_t sync_pending = 0;
 
 
 int main(void)
@@ -101,6 +109,11 @@ void initialise_hardware(void)
     /* Ensure LEDs start OFF */
     PORTD &= ~0b11111100;  // Clear PD2-PD7
     PORTA &= ~((1<<PA2)|(1<<PA3));  // Clear PA2-PA3
+
+    /* Synchronous mode */
+    // Make port A pin 7 input
+    DDRA &= ~(1<<PA7);
+    PORTA |= (1<<PA7);
 }
 
 void start_splash_screen(void)
@@ -143,8 +156,13 @@ void start_morse(void)
 
     while(1)
     {
-        // Handle any button or key inputs
-        handle_inputs();
+        /* Determine mode based on S0 (PA7) */
+        if (PINA & (1<<PA7)) {
+            handle_sync_mode();
+        } else {
+            // Handle any button or key inputs
+            handle_inputs();
+        }
 
         /* Timer 0 */
         if (timer1_fired) {
@@ -155,6 +173,38 @@ void start_morse(void)
         ssd_multiplex();
     }
     // should never reach
+}
+
+/* Handle synchronous mode */
+static void handle_sync_mode(void) {
+    uint8_t current_b0 = (PINB & (1<<PB0)) ? 1 : 0;
+
+    /* Detect press */
+    if (current_b0 && !sync_b0_pressed) {
+        sync_b0_pressed = 1;
+        sync_press_ticks = 0;   // start counting holder time
+        sync_release_ticks = 0; // stop counting release time
+    }
+
+    /* Detect release */
+    if (!current_b0 && sync_b0_pressed) {
+        sync_b0_pressed = 0;
+
+        /* Determine input */
+        if (sync_press_ticks < 2 ) {
+            // 200ms (DOT)
+            buttons_encode_dot();
+            trigger_dot();
+        } else {
+            // >= 200ms (DASH)
+            buttons_encode_dash();
+            trigger_dash();
+        }
+
+        sync_release_ticks = 0; // start counting release time
+        sync_submit_count = 0;  // reset submit count
+        sync_pending = 1;       // watch for submit timeout
+    }
 }
 
 /* Update IO board LEDs */
@@ -227,6 +277,28 @@ static void process_animation(void) {
             ledmatrix_update_column(13, blank);
             ledmatrix_update_column(14, blank);
             ledmatrix_update_column(15, blank);
+        }
+    }
+
+    /* Synchronous mode ticks */
+    if (PINA & (1<<PA7)) {
+        if (sync_b0_pressed) {
+            sync_press_ticks++;
+        } else if (sync_pending) {
+            sync_release_ticks++;
+
+            /* Check submit */
+            if (sync_release_ticks >= 10 && sync_submit_count == 0) {
+                /* 1000ms (First SUBMIT) */
+                trigger_submit();
+                sync_submit_count = 1;
+
+            } else if (sync_release_ticks >= 20 && sync_submit_count == 1) {
+                /* 2000ms (Second SUBMIT) */
+                trigger_submit();
+                sync_submit_count = 2;
+                sync_pending = 0;   // stop watching for submit
+            }
         }
     }
 }

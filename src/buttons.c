@@ -60,3 +60,11 @@ void buttons_clear_state(void) {
     morse_code = 0b00000001;
     last_submit = 0;
 }
+
+void buttons_encode_dot(void) {
+    morse_code <<= 1;   // shift left and append 0
+}
+
+void buttons_encode_dash(void) {
+    morse_code = (morse_code << 1) | 1;   // shift left and append 1
+}
