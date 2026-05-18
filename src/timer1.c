@@ -1,5 +1,5 @@
 /*
- * timer0.c
+ * timer1.c
  */ 
 
 #include <avr/io.h>
