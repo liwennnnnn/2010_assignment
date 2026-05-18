@@ -52,6 +52,9 @@ static uint8_t char_count = 0;  // total submitted characters mod 16
 static uint8_t terminal_col = 0;    // current column
 static uint8_t terminal_row = 1;    // current row
 
+/* LED matrix animation state */
+static uint8_t matrix_shifts_remaining = 0;
+
 
 int main(void)
 {
@@ -192,10 +195,27 @@ static void start_animation(uint8_t beats, uint8_t value) {
 
 /* Called when timer1 fires  */
 static void process_animation(void) {
+    /* Process IO board LED animation */
     if (anim_beats_remaining > 0) {
         led_history = (led_history << 1) | anim_beat_value;
         update_io_leds();
         anim_beats_remaining--;
+    }
+
+    /* Process LED matrix shift animation */
+    if (matrix_shifts_remaining > 0) {
+        ledmatrix_shift_left(1);
+        matrix_shifts_remaining--;
+
+        if (matrix_shifts_remaining == 0) {
+            /* Clear the rightmost 3 columns before drawing new character */
+            // initialise array with 8 'COLOUR_BLACK'
+            uint8_t blank[MATRIX_NUM_ROWS] = {0};
+
+            ledmatrix_update_column(13, blank);
+            ledmatrix_update_column(14, blank);
+            ledmatrix_update_column(15, blank);
+        }
     }
 }
 
@@ -399,16 +419,8 @@ void handle_inputs(void)
             /* Draw new character at right edge */
             draw_small_char(c, 13, COLOUR_GREEN);
 
-            /* Shift existing characters left by 4 columns */
-            ledmatrix_shift_left(4);
-
-            /* Clear the rightmost 3 columns before drawing new character */
-            // initialise array with 8 'COLOUR_BLACK'
-            uint8_t blank[MATRIX_NUM_ROWS] = {0};
-
-            ledmatrix_update_column(13, blank);
-            ledmatrix_update_column(14, blank);
-            ledmatrix_update_column(15, blank);
+            /* Queue 4 left shifts */
+            matrix_shifts_remaining = 4;
         }
 
         /* Update count (cap at 4) */
