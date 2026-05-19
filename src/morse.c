@@ -53,6 +53,10 @@ static void beat_queue_push(uint8_t value);
 static int8_t beat_queue_pop(void);
 static void flush_matrix_animation(void);
 static void flush_beat_queue(void);
+static void buzzer_queue_push(uint8_t type);
+static int8_t buzzer_queue_pop(void);
+static void flush_buzzer_queue(void);
+void handle_serial_input(void);
 
 /* Functions to handle inputs */
 static void trigger_dot(void);
@@ -586,7 +590,6 @@ void handle_serial_input(void) {
             /* Flush animation, beat queue and buzzer queue */
             flush_matrix_animation();
             flush_beat_queue();
-            flush_buzzer_queue();
 
             /* Discard incomplete character */
             buttons_reset_morse();
