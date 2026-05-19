@@ -386,10 +386,10 @@ static void update_ssd(void)
 }
 
 /* Serial terminal output */
-static void terminal_print_char(char c)
+static void terminal_print_char(char c, const char* colour)
 {
     move_terminal_cursor(terminal_col + 1, terminal_row);
-    printf("%c", c);
+    printf("%s%c%s", colour, c, TERM_RESET);
 
     terminal_col++;
 
@@ -406,7 +406,7 @@ static void terminal_print_char(char c)
     }
 }
 
-static void terminal_replace_incomplete(char c)
+static void terminal_replace_incomplete(char c, const char* colour)
 {
     /* Move back one column to overwrite incomplete charater */
     if (terminal_col > 0)
@@ -415,7 +415,7 @@ static void terminal_replace_incomplete(char c)
     }
 
     move_terminal_cursor(terminal_col + 1, terminal_row);
-    printf("%c", c);
+    printf("%s%c%s", colour, c , TERM_RESET);
 
     terminal_col++;
 }
@@ -479,11 +479,11 @@ static void trigger_dot(void) {
     /* Serial terminal output */
     if (has_incomplete)
     {
-        terminal_replace_incomplete(incomplete_char);
+        terminal_replace_incomplete(incomplete_char, TERM_RED);
     } 
     else
     {
-        terminal_print_char(incomplete_char);
+        terminal_print_char(incomplete_char, TERM_RED);
         has_incomplete = 1;
     }
 }
@@ -517,11 +517,11 @@ static void trigger_dash(void) {
     /* Serial terminal output */
     if (has_incomplete)
     {
-        terminal_replace_incomplete(incomplete_char);
+        terminal_replace_incomplete(incomplete_char, TERM_RED);
     } 
     else
     {
-        terminal_print_char(incomplete_char);
+        terminal_print_char(incomplete_char, TERM_RED);
         has_incomplete = 1;
     }
 }
@@ -544,6 +544,9 @@ static void trigger_submit(void) {
 
             /* Queue 4 left shifts */
             matrix_shifts_remaining = 4;
+
+            /* Serial terminal output */
+            terminal_replace_incomplete(c, TERM_GREEN);
         }
 
         /* Update count (cap at 4) */
@@ -572,7 +575,7 @@ static void trigger_submit(void) {
         update_ssd();
 
         /* Serial terminal output */
-        terminal_print_char(' ');
+        terminal_print_char(' ', TERM_RESET);
         has_incomplete = 0;    // reset has_incomplete
     }
 }
@@ -603,7 +606,7 @@ void handle_serial_input(void) {
             matrix_shifts_remaining = 4;
 
             /* Terminal output */
-            terminal_print_char(c);
+            terminal_print_char(c, TERM_YELLOW);
 
             /* Queue morse pattern on IO board and buzzer */
             uint8_t p = pattern;

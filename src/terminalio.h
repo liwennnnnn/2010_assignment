@@ -10,6 +10,12 @@
 #ifndef TERMINAL_IO_H_
 #define TERMINAL_IO_H_
 
+/* Colours */
+#define TERM_RED    "\033[31m"
+#define TERM_GREEN  "\033[32m"
+#define TERM_YELLOW "\033[33m"
+#define TERM_RESET  "\033[0m"
+
 #include <stdint.h>
 /*
  * x (column number) and y (row number) are measured relative to the top
