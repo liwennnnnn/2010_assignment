@@ -32,8 +32,6 @@ void start_morse(void);
 void start_splash_screen(void);
 void handle_inputs(void);
 void update_io_leds(void);
-static void add_beat_flush(uint8_t value);
-static void start_animation(uint8_t beats, uint8_t value);
 static void process_animation(void);
 static void update_ssd(void);
 static void handle_sync_mode(void);
@@ -53,10 +51,6 @@ static uint8_t has_incomplete = 0;
 /* LED history shift register */
 static uint8_t led_history = 0; // 8-bit
 
-/* Animtaion state */
-static uint8_t anim_beats_remaining = 0;
-static uint8_t anim_beat_value = 0;
-
 /* Track number of marks and characters */
 static uint8_t mark_count = 0;  // marks in current character
 static uint8_t char_count = 0;  // total submitted characters mod 16
@@ -74,6 +68,13 @@ static uint8_t sync_press_ticks = 0;
 static uint8_t sync_release_ticks = 0;
 static uint8_t sync_submit_count = 0;
 static uint8_t sync_pending = 0;
+
+/* Beat queue for IO board animation */
+#define BEAT_QUEUE_SIZE 20
+static uint8_t beat_queue[BEAT_QUEUE_SIZE];
+static uint8_t beat_queue_head = 0;
+static uint8_t beat_queue_tail = 0;
+static uint8_t beat_queue_count = 0;
 
 
 int main(void)
@@ -217,51 +218,29 @@ void update_io_leds(void) {
     PORTA = (PORTA & 0xF3) | ((led_history & 0xC0) >> 4);
 }
 
-/* 
- * Add a single beat and flush any pedning animation.
- * Used when starting a completely new input
- */
-static void add_beat_flush(uint8_t value) {
-    /* Flush pending animation */
-    if (anim_beats_remaining > 0) {
-        for (uint8_t i = 0; i < anim_beats_remaining; i++) {
-            led_history = (led_history << 1) | anim_beat_value;
-        }
-        update_io_leds();
-        anim_beats_remaining = 0;
+static void beat_queue_push(uint8_t value) {
+    if (beat_queue_count < BEAT_QUEUE_SIZE) {
+        beat_queue[beat_queue_tail] = value;
+        beat_queue_tail = (beat_queue_tail + 1) % BEAT_QUEUE_SIZE;
+        beat_queue_count++;
     }
-
-    /* Add beat */
-    led_history = (led_history << 1) | (value ? 1 : 0);
-    update_io_leds();
 }
 
-/* 
- * Start animation for the given number of beats 
- * Flushes any pending animation first 
- */
-static void start_animation(uint8_t beats, uint8_t value) {
-    /* Flush pending animation */
-    if (anim_beats_remaining > 0) {
-        for (uint8_t i = 0; i < anim_beats_remaining; i++) {
-            led_history = (led_history << 1) | anim_beat_value;
-        }
-        update_io_leds();
-        anim_beats_remaining = 0;
-    }
-
-    /* Set up new animation */
-    anim_beats_remaining = beats;
-    anim_beat_value = value ? 1 : 0;
+static int8_t beat_queue_pop(void) {
+    if (beat_queue_count == 0) return -1;   // empty
+    uint8_t val = beat_queue[beat_queue_head];
+    beat_queue_head = (beat_queue_head + 1) % BEAT_QUEUE_SIZE;
+    beat_queue_count--;
+    return val;
 }
 
-/* Called when timer1 fires  */
+/* Called when timer1 fires (every 100ms)  */
 static void process_animation(void) {
     /* Process IO board LED animation */
-    if (anim_beats_remaining > 0) {
-        led_history = (led_history << 1) | anim_beat_value;
+    if (beat_queue_count > 0) {
+        int8_t beat = beat_queue_pop();
+        led_history = (led_history << 1) | (beat ? 1 : 0);
         update_io_leds();
-        anim_beats_remaining--;
     }
 
     /* Process LED matrix shift animation */
@@ -357,19 +336,39 @@ static void terminal_replace_incomplete(char c)
     terminal_col++;
 }
 
+static void flush_matrix_animation(void) {
+    if (matrix_shifts_remaining > 0) {
+        ledmatrix_shift_left(matrix_shifts_remaining); // finish instantly
+        matrix_shifts_remaining = 0;
+        uint8_t blank[MATRIX_NUM_ROWS] = {0};
+        ledmatrix_update_column(13, blank);
+        ledmatrix_update_column(14, blank);
+        ledmatrix_update_column(15, blank);
+    }
+}
+
+static void flush_beat_queue(void) {
+    while (beat_queue_count > 0) {
+        int8_t beat = beat_queue_pop();
+        led_history = (led_history << 1) | (beat ? 1 : 0);
+    }
+    update_io_leds();
+}
+
 /* Handle DOT */
 static void trigger_dot(void) {
+    /* Flush animation and beat queue */
+    flush_matrix_animation();
+    flush_beat_queue();
+
     if (!new_char) {
         /* 1 OFF beat */
-        add_beat_flush(0);
-        start_animation(1, 1);  // animate 1 ON bit
-    } else {
-        // 1 ON beat
-        add_beat_flush(1);
-        new_char = 0;
-        /* Clear pending animation */
-        anim_beats_remaining = 0;
+        beat_queue_push(0);
     }
+    /* 1 ON beat */
+    beat_queue_push(1);
+
+    new_char = 0;
     
     /* Display partial char */
     uint8_t morse_code = buttons_get_morse_code();
@@ -396,21 +395,18 @@ static void trigger_dot(void) {
 
 /* Handle DASH */
 static void trigger_dash(void) {
-    if (!new_char) {
-        // 1 OFF beat
-        add_beat_flush(0);
-        // first ON beat without flush
-        add_beat_flush(1);
+    /* Flush animation and beat queue */
+    flush_matrix_animation();
+    flush_beat_queue();
 
-        // remaining 2 ON beats
-        start_animation(2, 1);
-    } else {
-        // first ON beat without flush
-        add_beat_flush(1);
-        new_char = 0;
-        // remaining 2 ON beats
-        start_animation(2, 1);
+    if (!new_char) {
+        beat_queue_push(0);
     }
+    for (int i = 0; i < 3; i++) {
+        beat_queue_push(1);
+    }
+    
+    new_char = 0;
 
     /* Display partial char */
     uint8_t morse_code = buttons_get_morse_code();
@@ -439,7 +435,9 @@ static void trigger_dash(void) {
 static void trigger_submit(void) {
     if (submit_count == 0) {
         /* First submit - end of character (3 beat gap) */
-        start_animation(3, 0);
+        for (int i = 0; i < 3; i++) {
+            beat_queue_push(0);
+        }
         
         /* LED matrix */
         uint8_t morse_code = buttons_get_morse_code();
@@ -472,7 +470,8 @@ static void trigger_submit(void) {
     } else if (submit_count == 1) {
         /* Second submit - end of word (total 5 beat gap) */
         // Add 2 more OFF beats
-        start_animation(2, 0);
+        beat_queue_push(0);
+        beat_queue_push(0);
         new_char = 1;
         submit_count = 2;
         update_ssd();
@@ -506,6 +505,10 @@ void handle_inputs(void)
 
         if (pattern != 0)
         {
+            /* Flush animation and beat queue */
+            flush_matrix_animation();
+            flush_beat_queue();
+
             /* Discard incomplete character */
             buttons_reset_morse();
             mark_count = 0;
@@ -514,17 +517,36 @@ void handle_inputs(void)
             submit_count = 0;
 
             /* LED matrix */
-            draw_small_char(c, 13, COLOUR_GREEN);
-            ledmatrix_shift_left(4);
-
-            uint8_t blank[MATRIX_NUM_ROWS] = {0};
-
-            ledmatrix_update_column(13, blank);
-            ledmatrix_update_column(14, blank);
-            ledmatrix_update_column(15, blank);
+            draw_small_char(c, 13, COLOUR_YELLOW);
+            matrix_shifts_remaining = 4;
 
             /* Terminal output */
             terminal_print_char(c);
+
+            /* Queue morse pattern on IO board */
+            uint8_t p = pattern;
+            uint8_t prefix_pos = 0;
+            uint8_t temp = p;
+            while (temp > 1) {
+                prefix_pos++;
+                temp >>= 1;
+            }
+
+            for (int8_t i = prefix_pos - 1;i >= 0; i--) {
+                if (i < prefix_pos - 1) beat_queue_push(0);
+                if (p & (1 << i)) {
+                    for (int i = 0; i < 3; i++) {
+                        beat_queue_push(1);
+                    }
+                } else {
+                    beat_queue_push(1);
+                }
+            }
+
+            /* 3 OFF beat */
+            for (int i = 0; i < 3; i++) {
+                beat_queue_push(0);
+            }
         }
     }   
 
