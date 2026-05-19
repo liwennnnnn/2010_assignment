@@ -64,7 +64,7 @@ static uint8_t font_is_large(void);
 static uint8_t get_font_width(void);
 static uint8_t get_font_shift(void);
 static uint8_t get_max_char(void);
-static void store_character(char c);
+static void store_character(char c, uint8_t colour);
 static void redraw_chars(void);
 static void check_font_change(void);
 
@@ -118,6 +118,7 @@ static uint8_t current_font_large = 0;
 
 /* Character storage */
 static char stored_chars[MAX_STORED_CHARS];
+static uint8_t stored_colours[MAX_STORED_CHARS];
 static uint8_t stored_count = 0;
 static char stored_incomplete_char = '\0';
 
@@ -503,17 +504,19 @@ static uint8_t get_right_edge_col(void) {
 }
 
 /* Character storage */
-static void store_character(char c) {
+static void store_character(char c, uint8_t colour) {
     uint8_t max_chars = get_max_char();
 
     if (stored_count >= max_chars) {
         for (uint8_t i = 0; i < stored_count - 1; i++) {
-            stored_chars[i] = stored_chars[i+1];
+            stored_chars[i] = stored_chars[i + 1];
+            stored_colours[i] = stored_colours[i + 1];
         }
         stored_count--;
     }
     // Add new character
     stored_chars[stored_count] = c;
+    stored_colours[stored_count] = colour;
     stored_count++;
 }
 
@@ -526,7 +529,7 @@ static void redraw_chars(void) {
 
     for (uint8_t i = 0; i < stored_count; i++) {
         uint8_t pos = right_edge - ((stored_count - i) * shift);
-        draw_char(stored_chars[i], pos, COLOUR_GREEN, current_font_large);
+        draw_char(stored_chars[i], pos, stored_colours[i], current_font_large);
     }
 
     if (has_incomplete) {
@@ -675,7 +678,7 @@ static void trigger_submit(void) {
             matrix_shifts_remaining = get_font_shift();
 
             /* Store character */
-            store_character(c);
+            store_character(c, COLOUR_GREEN);
 
             /* Clear stored incomplete char */
             stored_incomplete_char = '\0';
@@ -742,7 +745,7 @@ void handle_serial_input(void) {
             matrix_shifts_remaining = get_font_shift();
 
             /* Store character */
-            store_character(c);
+            store_character(c, COLOUR_YELLOW);
 
             /* Terminal output */
             terminal_print_char(c, TERM_YELLOW);
