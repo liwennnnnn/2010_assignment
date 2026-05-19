@@ -35,6 +35,10 @@ void update_io_leds(void);
 static void process_animation(void);
 static void update_ssd(void);
 static void handle_sync_mode(void);
+static void beat_queue_push(uint8_t value);
+static int8_t beat_queue_pop(void);
+static void flush_matrix_animation(void);
+static void flush_beat_queue(void);
 
 /* Functions to handle inputs */
 static void trigger_dot(void);
