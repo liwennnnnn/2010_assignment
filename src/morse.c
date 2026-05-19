@@ -183,6 +183,9 @@ void start_morse(void)
 
     while(1)
     {
+        /* Always handle serial input */
+        handle_serial_input(); 
+
         /* Determine mode based on S0 (PA7) */
         if (PINA & (1<<PA7)) {
             handle_sync_mode();
@@ -570,21 +573,8 @@ static void trigger_submit(void) {
     }
 }
 
-void handle_inputs(void)
-{
-    /* ******** START HERE ********
-    
-    Read the button. Enter a mark if there is a rising edge on b0.
-    A way to do this is to check if the previous b0 state is 0,
-    and the current b0 state is a 1.
-	(You will need to implement a method of tracking the previous b0 state.)
-	Ensure that when you press a button to exit the splash screen,
-	that this button press doesn't immediately trigger an input here.
-    
-    --. --- --- -.. / .-.. ..- -.-. -.-
-    */
-
-   if (serial_input_available()) {
+void handle_serial_input(void) {
+    if (serial_input_available()) {
         /* Check serial input */
         int ch = fgetc(stdin);   // get serial input
 
@@ -650,7 +640,22 @@ void handle_inputs(void)
                 buzzer_queue_push(BUZZER_OFF);
             }
         }
-    }   
+    } 
+}
+
+void handle_inputs(void)
+{
+    /* ******** START HERE ********
+    
+    Read the button. Enter a mark if there is a rising edge on b0.
+    A way to do this is to check if the previous b0 state is 0,
+    and the current b0 state is a 1.
+	(You will need to implement a method of tracking the previous b0 state.)
+	Ensure that when you press a button to exit the splash screen,
+	that this button press doesn't immediately trigger an input here.
+    
+    --. --- --- -.. / .-.. ..- -.-. -.-
+    */
 
    uint8_t edge = buttons_get_rising_edge();
 
