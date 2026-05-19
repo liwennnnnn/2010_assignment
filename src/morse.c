@@ -25,6 +25,7 @@
 #include "timer1.h"
 #include "ssd.h"
 #include "buzzer.h"
+#include "joystick.h"
 
 /* Beat queue */
 #define BEAT_QUEUE_SIZE 20
@@ -40,7 +41,7 @@
 #define BUZZER_QUEUE_SIZE 20
 
 /* Character storage */
-#define MAX_STORED_CHARS 4
+#define MAX_STORED_CHARS 55
 
 
 /* Internal Function Declarations */
@@ -48,18 +49,30 @@ void initialise_hardware(void);
 void start_morse(void);
 void start_splash_screen(void);
 void handle_inputs(void);
+
+/* IO board LEDs */
 void update_io_leds(void);
 static void process_animation(void);
-static void update_ssd(void);
-static void handle_sync_mode(void);
 static void beat_queue_push(uint8_t value);
 static int8_t beat_queue_pop(void);
 static void flush_matrix_animation(void);
 static void flush_beat_queue(void);
+
+/* SSD */
+static void update_ssd(void);
+
+/* Synchronous mode */
+static void handle_sync_mode(void);
+
+/* Buzzer */
 static void buzzer_queue_push(uint8_t type);
 static int8_t buzzer_queue_pop(void);
 static void flush_buzzer_queue(void);
+
+/* Serial terminal */
 void handle_serial_input(void);
+
+/* Font selection */
 static uint8_t font_is_large(void);
 static uint8_t get_font_width(void);
 static uint8_t get_font_shift(void);
@@ -67,6 +80,12 @@ static uint8_t get_max_char(void);
 static void store_character(char c, uint8_t colour);
 static void redraw_chars(void);
 static void check_font_change(void);
+static uint8_t get_right_edge_col(void);
+
+/* Joystick scroll */
+static void redraw_scroll(void);
+static int8_t get_scroll_speed(int16_t joystick_x);
+static void snap_to_present(void);
 
 /* Functions to handle inputs */
 static void trigger_dot(void);
@@ -122,6 +141,12 @@ static uint8_t stored_colours[MAX_STORED_CHARS];
 static uint8_t stored_count = 0;
 static char stored_incomplete_char = '\0';
 
+/* Joystick state */
+static int16_t scroll_offset = 0;   // 0 = newest char at right edge
+static uint8_t is_scrolling = 0;
+static int16_t adc_busy = 0;        // 1 = ADC conversion in progress
+static uint16_t joystick_x = 512;
+
 
 int main(void)
 {
@@ -144,6 +169,9 @@ void initialise_hardware(void)
 
     // Initialise buzzer
     buzzer_init();
+
+    // Initialise joystick
+    joystick_init();
 
     sei(); // enable global interrupts
 
@@ -393,6 +421,57 @@ static void process_animation(void) {
             }
         }
     }
+
+    /* Joystick scroll */
+    if (!adc_busy) {
+        joystick_start_conversion(JOYSTICK_X_AXIS);
+        adc_busy = 1;
+    }
+
+    /* Read result */
+    if (adc_busy && joystick_conversion_complete()) {
+        joystick_x = joystick_get_result();
+        adc_busy = 0;
+
+        int16_t signed_x = (int16_t)joystick_x - 512;
+
+        /* Apply deadzone */
+        if (signed_x > -JOYSTICK_DEADZONE && signed_x < JOYSTICK_DEADZONE) {
+            signed_x = 0;
+        }
+
+        int8_t speed = get_scroll_speed(signed_x);
+
+        /* Tilting RIGHT (positive speed) = scroll into past = increase offset */
+        /* Tilting LEFT  (negative speed) = back to present  = decrease offset */
+        if (speed != 0) {
+            /* Apply scroll */
+            scroll_offset += speed;
+
+            /* Restrict from scrolling pass newest char */
+            if (scroll_offset < 0) scroll_offset = 0;
+
+            /* Restrict from scrolling pass oldest char */
+            // Account for incomplete char occupying one extra slot
+            uint8_t total_slots = stored_count + (has_incomplete ? 1 : 0);
+            int16_t max_offset = (int16_t)(total_slots * get_font_shift()) - MATRIX_NUM_COLUMNS;
+            if (max_offset < 0) max_offset = 0;
+            if (scroll_offset > max_offset) scroll_offset = max_offset;
+
+            is_scrolling = (scroll_offset > 0);
+
+            /* Redraw charaters */
+            redraw_scroll();
+        }
+    }
+}
+
+static void snap_to_present(void) {
+    if (scroll_offset != 0) {
+        scroll_offset = 0;
+        is_scrolling = 0;
+        redraw_scroll();  // redraw at offset 0
+    }
 }
 
 /* Update SSD */
@@ -492,7 +571,7 @@ static uint8_t get_font_width(void) {
 }
 
 static uint8_t get_font_shift(void) {
-    return current_font_large ? 5 : 4;
+    return current_font_large ? 6 : 4;
 }
 
 static uint8_t get_max_char(void) {
@@ -505,14 +584,14 @@ static uint8_t get_right_edge_col(void) {
 
 /* Character storage */
 static void store_character(char c, uint8_t colour) {
-    uint8_t max_chars = get_max_char();
-
-    if (stored_count >= max_chars) {
-        for (uint8_t i = 0; i < stored_count - 1; i++) {
+    if (stored_count >= MAX_STORED_CHARS) {
+        /* Buffer full */
+        // Shift everything left, discard oldest char
+        for (uint8_t i = 0; i < MAX_STORED_CHARS - 1; i++) {
             stored_chars[i] = stored_chars[i + 1];
             stored_colours[i] = stored_colours[i + 1];
         }
-        stored_count--;
+        stored_count = MAX_STORED_CHARS - 1;
     }
     // Add new character
     stored_chars[stored_count] = c;
@@ -527,14 +606,24 @@ static void redraw_chars(void) {
     uint8_t shift = get_font_shift();
     uint8_t right_edge = MATRIX_NUM_COLUMNS - width;
 
+    /* Newest completed char sits at right_edge (or one slot left if incomplete) */
+    int16_t newest_pos = has_incomplete
+                         ? (int16_t)(right_edge - shift)
+                         : (int16_t)right_edge;
+
     for (uint8_t i = 0; i < stored_count; i++) {
-        uint8_t pos = right_edge - ((stored_count - i) * shift);
-        draw_char(stored_chars[i], pos, stored_colours[i], current_font_large);
+        /* Position relative to newest char */
+        int16_t pos = newest_pos - (int16_t)((stored_count - 1 - i) * shift);
+
+        /* Only draw chars that are at least partially on screen */
+        if (pos + (int16_t)width > 0 && pos < (int16_t)MATRIX_NUM_COLUMNS) {
+            draw_char(stored_chars[i], (uint8_t)pos,
+                      stored_colours[i], current_font_large);
+        }
     }
 
     if (has_incomplete) {
-        uint8_t start_col = get_right_edge_col();
-        draw_char(stored_incomplete_char, start_col, COLOUR_RED, current_font_large);
+        draw_char(stored_incomplete_char, right_edge, COLOUR_RED, current_font_large);
     }
 }
 
@@ -544,37 +633,67 @@ static void check_font_change(void) {
     if (new_font != current_font_large) {
         current_font_large = new_font;
 
-        uint8_t max_chars = get_max_char();
-
-        // Update char_displayed to match buffer
-        if (stored_count > get_max_char()) {
-            // Remove oldest char
-            uint8_t remove = stored_count - max_chars;
-            for (uint8_t i = 0; i < max_chars; i++) {
-                stored_chars[i] = stored_chars[i + remove];
-            }
-            stored_count = max_chars;
-        }
+        /* Reset scroll */
+        scroll_offset = 0;
+        is_scrolling = 0;
 
         // Sync char_displayed with stored_count
         char_displayed = stored_count;
+        
+        flush_matrix_animation();
 
         // Redraw all chars
         redraw_chars();
-        flush_matrix_animation();
+    }
+}
 
-        /* Redraw incomplete chars */
-        if (has_incomplete) {
-            uint8_t morse_code = buttons_get_morse_code();
-            char incomplete_char = morse_to_char(morse_code);
-            uint8_t start_col = get_right_edge_col();
-            draw_char(incomplete_char, start_col, COLOUR_RED, current_font_large);
+/* Joystick – scroll */
+static void redraw_scroll(void) {
+    ledmatrix_clear();
+
+    uint8_t width = get_font_width();
+    uint8_t shift = get_font_shift();
+    uint8_t right_edge = MATRIX_NUM_COLUMNS - width;
+
+    // Shift left if has_incomplete
+    int16_t base = (has_incomplete && scroll_offset == 0)
+                   ? (int16_t)(right_edge - shift)
+                   : (int16_t)right_edge;
+
+    for (uint8_t i = 0; i < stored_count; i++) {
+        /* At scroll_offset=0, newest char (i=stored_count-1) is at right edge.
+         * Older chars are further left. scroll_offset>0 shifts view into the past. */
+        int16_t pos = base
+                      - (int16_t)((stored_count - 1 - i) * shift)
+                      + scroll_offset;
+
+        if (pos + (int16_t)width > 0 && pos < MATRIX_NUM_COLUMNS) {
+            draw_char(stored_chars[i], (uint8_t)pos,
+                      stored_colours[i], current_font_large);
+        }
+        /* Draw incomplete char at righ edge */
+        if (has_incomplete && scroll_offset == 0) {
+            draw_char(stored_incomplete_char, get_right_edge_col(), COLOUR_RED, current_font_large);
         }
     }
 }
 
+static int8_t get_scroll_speed(int16_t joystick_x) {
+    if (joystick_x == 0) return 0;
+
+    /* Map magnitude to columns per tick */
+    // Divide by 64 to get 1-8 range from 64-512
+    int16_t magnitude = joystick_x < 0 ? -joystick_x : joystick_x;
+    int8_t speed = (int8_t)(magnitude / 64) + 1;
+    if (speed > 8) speed = 8;
+
+    /* Apply direction */
+    return joystick_x < 0 ? -speed : speed;
+}
+
 /* Handle DOT */
 static void trigger_dot(void) {
+    snap_to_present();
     /* Flush animation and beat queue */
     flush_matrix_animation();
     flush_beat_queue();
@@ -588,20 +707,8 @@ static void trigger_dot(void) {
 
     new_char = 0;
     
-    /* Display partial char */
     uint8_t morse_code = buttons_get_morse_code();
     char incomplete_char = morse_to_char(morse_code);
-    uint8_t start_col = get_right_edge_col();
-    draw_char(incomplete_char, start_col, COLOUR_RED, current_font_large);
-
-    /* Stored incomplete char */
-    stored_incomplete_char = incomplete_char;
-
-    submit_count = 0; // reset submit counter
-
-    /* Update SSD */
-    mark_count++;
-    update_ssd();
 
     /* Serial terminal output */
     if (has_incomplete)
@@ -611,12 +718,24 @@ static void trigger_dot(void) {
     else
     {
         terminal_print_char(incomplete_char, TERM_RED);
-        has_incomplete = 1;
     }
+
+    /* Display partial char */
+    // Stored incomplete char
+    has_incomplete = 1;
+    stored_incomplete_char = incomplete_char;
+    redraw_chars();
+
+    submit_count = 0; // reset submit counter
+
+    /* Update SSD */
+    mark_count++;
+    update_ssd();
 }
 
 /* Handle DASH */
 static void trigger_dash(void) {
+    snap_to_present();
     /* Flush animation and beat queue */
     flush_matrix_animation();
     flush_beat_queue();
@@ -630,20 +749,8 @@ static void trigger_dash(void) {
     
     new_char = 0;
 
-    /* Display partial char */
     uint8_t morse_code = buttons_get_morse_code();
     char incomplete_char = morse_to_char(morse_code);
-    uint8_t start_col = get_right_edge_col();
-    draw_char(incomplete_char, start_col, COLOUR_RED, current_font_large);
-
-    /* Stored incomplete char */
-    stored_incomplete_char = incomplete_char;
-    
-    submit_count = 0; // reset submit counter
-
-    /* Update SSD */
-    mark_count++;
-    update_ssd();
 
     /* Serial terminal output */
     if (has_incomplete)
@@ -653,13 +760,25 @@ static void trigger_dash(void) {
     else
     {
         terminal_print_char(incomplete_char, TERM_RED);
-        has_incomplete = 1;
     }
+
+    /* Display partial char */
+    // Stored incomplete char
+    has_incomplete = 1;
+    stored_incomplete_char = incomplete_char;
+    redraw_chars();
+
+    submit_count = 0; // reset submit counter
+
+    /* Update SSD */
+    mark_count++;
+    update_ssd();
 }
 
 /* Handle SUBMIT */
 static void trigger_submit(void) {
     if (submit_count == 0) {
+        snap_to_present();
         /* First submit - end of character (3 beat gap) */
         for (int i = 0; i < 3; i++) {
             beat_queue_push(0);
@@ -728,6 +847,7 @@ void handle_serial_input(void) {
 
         if (pattern != 0)
         {
+            snap_to_present();
             /* Flush animation, beat queue and buzzer queue */
             flush_matrix_animation();
             flush_beat_queue();
