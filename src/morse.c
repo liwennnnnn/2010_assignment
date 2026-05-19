@@ -143,8 +143,8 @@ void initialise_hardware(void)
 
     /* Synchronous mode */
     // Make port A pin 7 input
-    DDRA &= ~(1<<PA7);
-    PORTA |= (1<<PA7);
+    DDRA &= ~(1<<PA6);
+    PORTA |= (1<<PA6);
 }
 
 void start_splash_screen(void)
@@ -190,8 +190,8 @@ void start_morse(void)
         /* Always handle serial input */
         handle_serial_input(); 
 
-        /* Determine mode based on S0 (PA7) */
-        if (PINA & (1<<PA7)) {
+        /* Determine mode based on S0 (PA6) */
+        if (PINA & (1<<PA6)) {
             handle_sync_mode();
         } else {
             // Handle any button or key inputs
@@ -344,7 +344,7 @@ static void process_animation(void) {
     }
 
     /* Synchronous mode ticks */
-    if (PINA & (1<<PA7)) {
+    if (PINA & (1<<PA6)) {
         if (sync_b0_pressed) {
             sync_press_ticks++;
         } else if (sync_pending) {
