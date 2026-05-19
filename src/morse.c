@@ -106,14 +106,14 @@ void initialise_hardware(void)
     buttons_init();
 
     /* LEDs on IO Board */
-    // Make port D pin 2 to pin 7 ouput (L0-L5)
-    DDRD |= 0b11111100;
-    // Make port A pin 2 and 3 output (L6-L7)
-    DDRA |= (1<<PA2)|(1<<PA3);
+    // Make port D pin 2 to pin 5 and pin 7 output (L0-L4)
+    DDRD |= (1<<PD2) | (1<<PD3) | (1<<PD4) | (1<<PD5) | (1<<PD7);
+    // Make port A pin 2 to 4 output (L6-L7)
+    DDRA |= (1<<PA2) | (1<<PA3) | (1<<PA4);
 
     /* Ensure LEDs start OFF */
-    PORTD &= ~0b11111100;  // Clear PD2-PD7
-    PORTA &= ~((1<<PA2)|(1<<PA3));  // Clear PA2-PA3
+    PORTD &= ~((1<<PD2) | (1<<PD3) | (1<<PD4) | (1<<PD5) | (1<<PD7));
+    PORTA &= ~((1<<PA2) | (1<<PA3) | (1<<PA4));
 
     /* Synchronous mode */
     // Make port A pin 7 input
@@ -215,11 +215,36 @@ static void handle_sync_mode(void) {
 /* Update IO board LEDs */
 void update_io_leds(void) {
     /* Write to hardware */
-    // L0-L5 on PD2-PD7: bits 0-5 of led_history → shift left by 2
-    PORTD = (PORTD & 0x03) | ((led_history & 0x3F) << 2);
-
-    // L6-L7 on PA2-PA3: bits 6-7 of led_history → shift right by 4
-    PORTA = (PORTA & 0xF3) | ((led_history & 0xC0) >> 4);
+    // L0-L3 on PD2-PD5: bits 0-3
+    PORTD = (PORTD & 0x03) | ((led_history & 0x0F) << 2);
+    
+    // L4 on PD7: bit 4
+    if (led_history & 0x10) {
+        PORTD |= (1<<PD7);
+    } else {
+        PORTD &= ~(1<<PD7);
+    }
+    
+    // L5 on PA2: bit 5
+    if (led_history & 0x20) {
+        PORTA |= (1<<PA2);
+    } else {
+        PORTA &= ~(1<<PA2);
+    }
+    
+    // L6 on PA3: bit 6
+    if (led_history & 0x40) {
+        PORTA |= (1<<PA3);
+    } else {
+        PORTA &= ~(1<<PA3);
+    }
+    
+    // L7 on PA4: bit 7
+    if (led_history & 0x80) {
+        PORTA |= (1<<PA4);
+    } else {
+        PORTA &= ~(1<<PA4);
+    }
 }
 
 static void beat_queue_push(uint8_t value) {
