@@ -23,8 +23,8 @@ void ssd_init(void) {
     PORTC = 0x00;   // turn off all segments
 
     /* Configure CC pin as output */
-    DDRB |= (1<<PB3);
-    PORTB &= ~(1<<PB3);
+    DDRA |= (1<<PA5);
+    PORTA &= ~(1<<PA5);
 }
 
 void ssd_display(uint8_t left_digit, uint8_t right_digit, uint8_t dp_on) {
@@ -53,13 +53,13 @@ void ssd_multiplex(void) {
     if (current_digit == 0) {
         /* Show left digit */
         PORTC = 0x00;
-        PORTB |= (1<<PB3);
+        PORTA |= (1<<PA5);
         PORTC = left_side;
         current_digit = 1;
     } else {
         /* Show right digit */
         PORTC = 0x00;
-        PORTB &= ~(1<<PB3);
+        PORTA &= ~(1<<PA5);
         PORTC = right_side;
         current_digit = 0;
     }
