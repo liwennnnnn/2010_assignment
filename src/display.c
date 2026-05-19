@@ -19,6 +19,11 @@ uint8_t get_small_glyph_column(char c, uint8_t col);
  */
 uint8_t char_to_glyph_index(char c);
 
+/**
+ * Gets a specified column of a large char glyph
+ */
+uint8_t get_large_glyph_column(char c, uint8_t col);
+
 
 // constant value used to display splash screen on launch
 static const uint8_t splash_display[MATRIX_NUM_COLUMNS] =
@@ -217,3 +222,39 @@ uint8_t char_to_glyph_index(char c)
     } 
     return 37; // ? - fallback
 }
+
+void draw_large_char(char character, uint8_t x_position, uint8_t colour) {
+    uint8_t pixels[MATRIX_NUM_ROWS]; // one color per row
+
+    for (uint8_t col = 0; col < 5; col++) {
+        /* Get byte for this colum of the glyph */
+        uint8_t col_data = get_large_glyph_column(character, col);
+
+        for (uint8_t row = 0; row < MATRIX_NUM_ROWS; row++) {
+            /* Check bit of col_data */
+            if (col_data & 0x01) {
+                pixels[row] = colour;
+            } else {
+                pixels[row] = COLOUR_BLACK;
+            }
+            col_data >>= 1;
+        }
+        /* Send colum to LED matrix */
+        ledmatrix_update_column(x_position + col, pixels);
+    }
+}
+
+uint8_t get_large_glyph_column(char c, uint8_t col)
+{
+    uint8_t index = char_to_glyph_index(c);
+    return font_large[index][col];
+}
+
+void draw_char(char character, uint8_t x_position, uint8_t colour, 
+    uint8_t use_large_font) {
+        if (use_large_font) {
+            draw_large_char(character, x_position, colour);
+        } else {
+            draw_small_char(character, x_position, colour);
+        }
+    }

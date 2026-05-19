@@ -39,6 +39,9 @@
 /* Buzzer queue */
 #define BUZZER_QUEUE_SIZE 20
 
+/* Character storage */
+#define MAX_STORED_CHARS 4
+
 
 /* Internal Function Declarations */
 void initialise_hardware(void);
@@ -57,6 +60,13 @@ static void buzzer_queue_push(uint8_t type);
 static int8_t buzzer_queue_pop(void);
 static void flush_buzzer_queue(void);
 void handle_serial_input(void);
+static uint8_t font_is_large(void);
+static uint8_t get_font_width(void);
+static uint8_t get_font_shift(void);
+static uint8_t get_max_char(void);
+static void store_character(char c);
+static void redraw_chars(void);
+static void check_font_change(void);
 
 /* Functions to handle inputs */
 static void trigger_dot(void);
@@ -103,6 +113,14 @@ static uint8_t buzzer_queue_head = 0;
 static uint8_t buzzer_queue_tail = 0;
 static uint8_t buzzer_queue_count = 0;
 
+/* Font state */
+static uint8_t current_font_large = 0;
+
+/* Character storage */
+static char stored_chars[MAX_STORED_CHARS];
+static uint8_t stored_count = 0;
+static char stored_incomplete_char = '\0';
+
 
 int main(void)
 {
@@ -142,9 +160,14 @@ void initialise_hardware(void)
     PORTA &= ~((1<<PA2) | (1<<PA3) | (1<<PA4));
 
     /* Synchronous mode */
-    // Make port A pin 7 input
+    // Make port A pin 6 input
     DDRA &= ~(1<<PA6);
     PORTA |= (1<<PA6);
+
+    /* Font selection */
+    // Make post A pin 7 input
+    DDRA &= ~(1<<PA7);
+    PORTA |= (1<<PA7);
 }
 
 void start_splash_screen(void)
@@ -211,6 +234,8 @@ void start_morse(void)
 
 /* Handle synchronous mode */
 static void handle_sync_mode(void) {
+    check_font_change();
+
     uint8_t current_b0 = (PINB & (1<<PB0)) ? 1 : 0;
 
     /* Detect press */
@@ -337,9 +362,12 @@ static void process_animation(void) {
             // initialise array with 8 'COLOUR_BLACK'
             uint8_t blank[MATRIX_NUM_ROWS] = {0};
 
-            ledmatrix_update_column(13, blank);
-            ledmatrix_update_column(14, blank);
-            ledmatrix_update_column(15, blank);
+            uint8_t width = get_font_width();
+            uint8_t start_col = MATRIX_NUM_COLUMNS - width;
+
+            for (uint8_t i = 0; i < width; i++) {
+                ledmatrix_update_column(start_col + i, blank);
+            }
         }
     }
 
@@ -425,10 +453,13 @@ static void flush_matrix_animation(void) {
     if (matrix_shifts_remaining > 0) {
         ledmatrix_shift_left(matrix_shifts_remaining); // finish instantly
         matrix_shifts_remaining = 0;
+
         uint8_t blank[MATRIX_NUM_ROWS] = {0};
-        ledmatrix_update_column(13, blank);
-        ledmatrix_update_column(14, blank);
-        ledmatrix_update_column(15, blank);
+        uint8_t width = get_font_width();
+        uint8_t start_col = MATRIX_NUM_COLUMNS - width;
+        for (uint8_t i = 0; i < width; i++) {
+            ledmatrix_update_column(start_col + i, blank);
+        }
     }
 }
 
@@ -450,6 +481,95 @@ static void flush_beat_queue(void) {
     flush_buzzer_queue();
 }
 
+/* Font selection */
+static uint8_t font_is_large(void) {
+    return (PINA & (1<<PA7)) ? 1 : 0;
+}
+
+static uint8_t get_font_width(void) {
+    return current_font_large ? 5 : 3;
+}
+
+static uint8_t get_font_shift(void) {
+    return current_font_large ? 5 : 4;
+}
+
+static uint8_t get_max_char(void) {
+    return current_font_large ? 3 : 4;
+}
+
+static uint8_t get_right_edge_col(void) {
+    return MATRIX_NUM_COLUMNS - get_font_width();
+}
+
+/* Character storage */
+static void store_character(char c) {
+    uint8_t max_chars = get_max_char();
+
+    if (stored_count >= max_chars) {
+        for (uint8_t i = 0; i < stored_count - 1; i++) {
+            stored_chars[i] = stored_chars[i+1];
+        }
+        stored_count--;
+    }
+    // Add new character
+    stored_chars[stored_count] = c;
+    stored_count++;
+}
+
+static void redraw_chars(void) {
+    ledmatrix_clear();
+
+    uint8_t width = get_font_width();
+    uint8_t shift = get_font_shift();
+    uint8_t right_edge = MATRIX_NUM_COLUMNS - width;
+
+    for (uint8_t i = 0; i < stored_count; i++) {
+        uint8_t pos = right_edge - ((stored_count - i) * shift);
+        draw_char(stored_chars[i], pos, COLOUR_GREEN, current_font_large);
+    }
+
+    if (has_incomplete) {
+        uint8_t start_col = get_right_edge_col();
+        draw_char(stored_incomplete_char, start_col, COLOUR_RED, current_font_large);
+    }
+}
+
+/* Check for font change */
+static void check_font_change(void) {
+    uint8_t new_font = font_is_large();
+    if (new_font != current_font_large) {
+        current_font_large = new_font;
+
+        uint8_t max_chars = get_max_char();
+
+        // Update char_displayed to match buffer
+        if (stored_count > get_max_char()) {
+            // Remove oldest char
+            uint8_t remove = stored_count - max_chars;
+            for (uint8_t i = 0; i < max_chars; i++) {
+                stored_chars[i] = stored_chars[i + remove];
+            }
+            stored_count = max_chars;
+        }
+
+        // Sync char_displayed with stored_count
+        char_displayed = stored_count;
+
+        // Redraw all chars
+        redraw_chars();
+        flush_matrix_animation();
+
+        /* Redraw incomplete chars */
+        if (has_incomplete) {
+            uint8_t morse_code = buttons_get_morse_code();
+            char incomplete_char = morse_to_char(morse_code);
+            uint8_t start_col = get_right_edge_col();
+            draw_char(incomplete_char, start_col, COLOUR_RED, current_font_large);
+        }
+    }
+}
+
 /* Handle DOT */
 static void trigger_dot(void) {
     /* Flush animation and beat queue */
@@ -468,7 +588,11 @@ static void trigger_dot(void) {
     /* Display partial char */
     uint8_t morse_code = buttons_get_morse_code();
     char incomplete_char = morse_to_char(morse_code);
-    draw_small_char(incomplete_char, 13, COLOUR_RED);
+    uint8_t start_col = get_right_edge_col();
+    draw_char(incomplete_char, start_col, COLOUR_RED, current_font_large);
+
+    /* Stored incomplete char */
+    stored_incomplete_char = incomplete_char;
 
     submit_count = 0; // reset submit counter
 
@@ -506,7 +630,11 @@ static void trigger_dash(void) {
     /* Display partial char */
     uint8_t morse_code = buttons_get_morse_code();
     char incomplete_char = morse_to_char(morse_code);
-    draw_small_char(incomplete_char, 13, COLOUR_RED);
+    uint8_t start_col = get_right_edge_col();
+    draw_char(incomplete_char, start_col, COLOUR_RED, current_font_large);
+
+    /* Stored incomplete char */
+    stored_incomplete_char = incomplete_char;
     
     submit_count = 0; // reset submit counter
 
@@ -540,17 +668,24 @@ static void trigger_submit(void) {
 
         if (c != '\0') {
             /* Draw new character at right edge */
-            draw_small_char(c, 13, COLOUR_GREEN);
+            uint8_t start_col = get_right_edge_col();
+            draw_char(c, start_col, COLOUR_GREEN, current_font_large);
 
-            /* Queue 4 left shifts */
-            matrix_shifts_remaining = 4;
+            /* Queue left shifts */
+            matrix_shifts_remaining = get_font_shift();
+
+            /* Store character */
+            store_character(c);
+
+            /* Clear stored incomplete char */
+            stored_incomplete_char = '\0';
 
             /* Serial terminal output */
             terminal_replace_incomplete(c, TERM_GREEN);
         }
 
-        /* Update count (cap at 4) */
-        if (char_displayed < 4) {
+        /* Update count */
+        if (char_displayed < get_max_char()) {
             char_displayed++;
         }
         
@@ -602,11 +737,20 @@ void handle_serial_input(void) {
             submit_count = 0;
 
             /* LED matrix */
-            draw_small_char(c, 13, COLOUR_YELLOW);
-            matrix_shifts_remaining = 4;
+            uint8_t start_col = get_right_edge_col();
+            draw_char(c, start_col, COLOUR_YELLOW, current_font_large);
+            matrix_shifts_remaining = get_font_shift();
+
+            /* Store character */
+            store_character(c);
 
             /* Terminal output */
             terminal_print_char(c, TERM_YELLOW);
+
+            /* Update count */
+            if (char_displayed < get_max_char()) {
+                char_displayed++;
+            }
 
             /* Queue morse pattern on IO board and buzzer */
             uint8_t p = pattern;
@@ -662,6 +806,7 @@ void handle_inputs(void)
     
     --. --- --- -.. / .-.. ..- -.-. -.-
     */
+   check_font_change();
 
    uint8_t edge = buttons_get_rising_edge();
 
