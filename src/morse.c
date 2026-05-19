@@ -24,6 +24,20 @@
 #include "buttons.h"
 #include "timer1.h"
 #include "ssd.h"
+#include "buzzer.h"
+
+/* Beat queue */
+#define BEAT_QUEUE_SIZE 20
+
+/* Buzzer beat types */
+#define BUZZER_OFF          0
+#define BUZZER_DOT          1   // DOT frequency (normal duty)
+#define BUZZER_DASH         2   // DASH frequency (normal duty)
+#define BUZZER_DOT_LAST     3   // DOT frequency (10% duty)
+#define BUZZER_DASH_LAST    4   // DASH frequency (10% duty)
+
+/* Buzzer queue */
+#define BUZZER_QUEUE_SIZE 20
 
 
 /* Internal Function Declarations */
@@ -74,11 +88,16 @@ static uint8_t sync_submit_count = 0;
 static uint8_t sync_pending = 0;
 
 /* Beat queue for IO board animation */
-#define BEAT_QUEUE_SIZE 20
 static uint8_t beat_queue[BEAT_QUEUE_SIZE];
 static uint8_t beat_queue_head = 0;
 static uint8_t beat_queue_tail = 0;
 static uint8_t beat_queue_count = 0;
+
+/* Buzzer queue */
+static uint8_t buzzer_queue[BUZZER_QUEUE_SIZE];
+static uint8_t buzzer_queue_head = 0;
+static uint8_t buzzer_queue_tail = 0;
+static uint8_t buzzer_queue_count = 0;
 
 
 int main(void)
@@ -99,6 +118,9 @@ void initialise_hardware(void)
 
     // Initialise SSD
     ssd_init();
+
+    // Initialise buzzer
+    buzzer_init();
 
     sei(); // enable global interrupts
 
@@ -214,39 +236,47 @@ static void handle_sync_mode(void) {
 
 /* Update IO board LEDs */
 void update_io_leds(void) {
-    /* Write to hardware */
-    // L0-L3 on PD2-PD5: bits 0-3
-    PORTD = (PORTD & 0x03) | ((led_history & 0x0F) << 2);
-    
+    // Preserve PD0(TX), PD1(RX), PD6(buzzer) — mask = 0b01000011 = 0x43
+    PORTD = (PORTD & 0x43) | ((led_history & 0x0F) << 2);
+
     // L4 on PD7: bit 4
     if (led_history & 0x10) {
         PORTD |= (1<<PD7);
     } else {
         PORTD &= ~(1<<PD7);
     }
-    
+
     // L5 on PA2: bit 5
-    if (led_history & 0x20) {
-        PORTA |= (1<<PA2);
-    } else {
-        PORTA &= ~(1<<PA2);
-    }
-    
+    if (led_history & 0x20) { PORTA |= (1<<PA2);  }
+    else                     { PORTA &= ~(1<<PA2); }
+
     // L6 on PA3: bit 6
-    if (led_history & 0x40) {
-        PORTA |= (1<<PA3);
-    } else {
-        PORTA &= ~(1<<PA3);
-    }
-    
+    if (led_history & 0x40) { PORTA |= (1<<PA3);  }
+    else                     { PORTA &= ~(1<<PA3); }
+
     // L7 on PA4: bit 7
-    if (led_history & 0x80) {
-        PORTA |= (1<<PA4);
-    } else {
-        PORTA &= ~(1<<PA4);
+    if (led_history & 0x80) { PORTA |= (1<<PA4);  }
+    else                     { PORTA &= ~(1<<PA4); }
+}
+
+/* Buzzer queue */
+static void buzzer_queue_push(uint8_t type) {
+    if (buzzer_queue_count < BUZZER_QUEUE_SIZE) {
+        buzzer_queue[buzzer_queue_tail] = type;
+        buzzer_queue_tail = (buzzer_queue_tail + 1) % BUZZER_QUEUE_SIZE;
+        buzzer_queue_count++;
     }
 }
 
+static int8_t buzzer_queue_pop(void) {
+    if (buzzer_queue_count == 0) return -1;
+    uint8_t val = buzzer_queue[buzzer_queue_head];
+    buzzer_queue_head = (buzzer_queue_head + 1) % BUZZER_QUEUE_SIZE;
+    buzzer_queue_count--;
+    return val;
+}
+
+/* Beat queue */
 static void beat_queue_push(uint8_t value) {
     if (beat_queue_count < BEAT_QUEUE_SIZE) {
         beat_queue[beat_queue_tail] = value;
@@ -270,6 +300,24 @@ static void process_animation(void) {
         int8_t beat = beat_queue_pop();
         led_history = (led_history << 1) | (beat ? 1 : 0);
         update_io_leds();
+
+        int8_t buzzer_type = buzzer_queue_pop();
+
+        /* Check L0 state and buzzer type */
+        if (beat && buzzer_type > 0) {
+            switch (buzzer_type) {
+                case BUZZER_DOT:      buzzer_dot(0);  break;
+                case BUZZER_DASH:     buzzer_dash(0); break;
+                case BUZZER_DOT_LAST: buzzer_dot(1);  break;
+                case BUZZER_DASH_LAST:buzzer_dash(1); break;
+                default:              buzzer_stop();  break;
+            }
+        } else {
+            buzzer_stop();
+        }
+    } else {
+        /* No beat in queue */
+        buzzer_stop();
     }
 
     /* Process LED matrix shift animation */
@@ -365,6 +413,7 @@ static void terminal_replace_incomplete(char c)
     terminal_col++;
 }
 
+/* Flush animation */
 static void flush_matrix_animation(void) {
     if (matrix_shifts_remaining > 0) {
         ledmatrix_shift_left(matrix_shifts_remaining); // finish instantly
@@ -376,12 +425,22 @@ static void flush_matrix_animation(void) {
     }
 }
 
+/* Flush buzzer queue */
+static void flush_buzzer_queue(void) {
+    buzzer_queue_head = 0;
+    buzzer_queue_tail = 0;
+    buzzer_queue_count = 0;
+    buzzer_stop();
+}
+
+/* Flush beat queue */
 static void flush_beat_queue(void) {
     while (beat_queue_count > 0) {
         int8_t beat = beat_queue_pop();
         led_history = (led_history << 1) | (beat ? 1 : 0);
     }
     update_io_leds();
+    flush_buzzer_queue();
 }
 
 /* Handle DOT */
@@ -534,9 +593,10 @@ void handle_inputs(void)
 
         if (pattern != 0)
         {
-            /* Flush animation and beat queue */
+            /* Flush animation, beat queue and buzzer queue */
             flush_matrix_animation();
             flush_beat_queue();
+            flush_buzzer_queue();
 
             /* Discard incomplete character */
             buttons_reset_morse();
@@ -552,7 +612,7 @@ void handle_inputs(void)
             /* Terminal output */
             terminal_print_char(c);
 
-            /* Queue morse pattern on IO board */
+            /* Queue morse pattern on IO board and buzzer */
             uint8_t p = pattern;
             uint8_t prefix_pos = 0;
             uint8_t temp = p;
@@ -562,19 +622,32 @@ void handle_inputs(void)
             }
 
             for (int8_t i = prefix_pos - 1;i >= 0; i--) {
-                if (i < prefix_pos - 1) beat_queue_push(0);
+                if (i < prefix_pos - 1) {
+                    beat_queue_push(0);
+                    buzzer_queue_push(BUZZER_OFF);
+                }
+                
+                uint8_t last_mark = (i == 0);
+
                 if (p & (1 << i)) {
-                    for (int i = 0; i < 3; i++) {
+                    /* DASH 3 ON beats */
+                    for (int x = 0; x < 3; x++) {
                         beat_queue_push(1);
+                        buzzer_queue_push(last_mark ? 
+                            BUZZER_DASH_LAST : BUZZER_DASH);
                     }
                 } else {
+                    /* DOT 1 ON beat */
                     beat_queue_push(1);
+                    buzzer_queue_push(last_mark ? 
+                        BUZZER_DOT_LAST : BUZZER_DOT);
                 }
             }
 
             /* 3 OFF beat */
             for (int i = 0; i < 3; i++) {
                 beat_queue_push(0);
+                buzzer_queue_push(BUZZER_OFF);
             }
         }
     }   
