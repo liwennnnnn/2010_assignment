@@ -145,8 +145,11 @@ static char stored_incomplete_char = '\0';
 static int16_t scroll_offset = 0;   // 0 = newest char at right edge
 static uint8_t is_scrolling = 0;
 static int16_t adc_busy = 0;        // 1 = ADC conversion in progress
-static uint16_t joystick_x = 512;
 
+/* Brightness state */
+static uint8_t brightness_level = 14;
+static uint8_t brightness_ticks = 0;
+static uint8_t y_tilted = 0;
 
 int main(void)
 {
@@ -194,9 +197,14 @@ void initialise_hardware(void)
     PORTA |= (1<<PA6);
 
     /* Font selection */
-    // Make post A pin 7 input
+    // Make port A pin 7 input
     DDRA &= ~(1<<PA7);
     PORTA |= (1<<PA7);
+
+    /* Joystick */
+    // Make port A pin 0 and pin 1 input
+    DDRA &= ~((1<<PA0) | (1<<PA1));  // PA0 and PA1 as inputs
+    PORTA &= ~((1<<PA0) | (1<<PA1)); // Disable pull-ups
 }
 
 void start_splash_screen(void)
@@ -422,48 +430,108 @@ static void process_animation(void) {
         }
     }
 
+    /* Track the channel that reads the tick (x or y) */
+    static uint8_t adc_channel = JOYSTICK_X_AXIS;
+
     /* Joystick scroll */
     if (!adc_busy) {
-        joystick_start_conversion(JOYSTICK_X_AXIS);
+        joystick_start_conversion(adc_channel);  // use current channel, not hardcoded X
         adc_busy = 1;
     }
 
     /* Read result */
     if (adc_busy && joystick_conversion_complete()) {
-        joystick_x = joystick_get_result();
+        uint16_t result = joystick_get_result();
         adc_busy = 0;
 
-        int16_t signed_x = (int16_t)joystick_x - 512;
+        if (adc_channel == JOYSTICK_X_AXIS) {
+            /* Handle scroll */
+            int16_t signed_x = (int16_t)result - 512;
+            if (signed_x > -JOYSTICK_DEADZONE && signed_x < JOYSTICK_DEADZONE) signed_x = 0;
+            
+            int8_t speed = get_scroll_speed(signed_x);
 
-        /* Apply deadzone */
-        if (signed_x > -JOYSTICK_DEADZONE && signed_x < JOYSTICK_DEADZONE) {
-            signed_x = 0;
-        }
+            /* Tilting RIGHT = increase offset */
+            /* Tilting LEFT = decrease offset */
+            if (speed != 0) {
+                /* Apply scroll */
+                scroll_offset += speed;
 
-        int8_t speed = get_scroll_speed(signed_x);
+                /* Restrict from scrolling pass newest char */
+                if (scroll_offset < 0) scroll_offset = 0;
 
-        /* Tilting RIGHT (positive speed) = scroll into past = increase offset */
-        /* Tilting LEFT  (negative speed) = back to present  = decrease offset */
-        if (speed != 0) {
-            /* Apply scroll */
-            scroll_offset += speed;
+                /* Restrict from scrolling past oldest char */
+                uint8_t total_slots = stored_count + (has_incomplete ? 1 : 0);
+                int16_t content_width = (int16_t)(total_slots * get_font_shift()) + (get_font_width() - get_font_shift());
+                int16_t max_offset = content_width - MATRIX_NUM_COLUMNS;
+                if (max_offset < 0) max_offset = 0;
+                if (scroll_offset > max_offset) scroll_offset = max_offset;
 
-            /* Restrict from scrolling pass newest char */
-            if (scroll_offset < 0) scroll_offset = 0;
+                is_scrolling = (scroll_offset > 0);
 
-            /* Restrict from scrolling pass oldest char */
-            // Account for incomplete char occupying one extra slot
-            uint8_t total_slots = stored_count + (has_incomplete ? 1 : 0);
-            int16_t max_offset = (int16_t)(total_slots * get_font_shift()) - MATRIX_NUM_COLUMNS;
-            if (max_offset < 0) max_offset = 0;
-            if (scroll_offset > max_offset) scroll_offset = max_offset;
+                /* Redraw charaters */
+                redraw_scroll();
+            }
+            /* Next tick read Y */
+            adc_channel = JOYSTICK_Y_AXIS;
+        
+        } else {
+            /* Handle brightness */
+            int16_t signed_y = (int16_t)result - 512;
+            if (signed_y > -JOYSTICK_DEADZONE && signed_y < JOYSTICK_DEADZONE) signed_y = 0;
 
-            is_scrolling = (scroll_offset > 0);
+            if (signed_y == 0) {
+                /* Neutral */
+                // Reset timing
+                brightness_ticks = 0;
+                y_tilted = 0;
+            } else {
+                /* Tilted */
+                if (!y_tilted) {
+                    /* First tick of tilt */
+                    // Change brightness immediately
+                    y_tilted = 1;
+                    brightness_ticks = 0;
 
-            /* Redraw charaters */
-            redraw_scroll();
+                    if (signed_y < 0 && brightness_level > 0) {
+                        brightness_level--;
+                        if (is_scrolling) redraw_scroll(); else redraw_chars();
+                    } else if (signed_y > 0 && brightness_level < 14) {
+                        brightness_level++;
+                        if (is_scrolling) redraw_scroll(); else redraw_chars();
+                    }
+                } else {
+                    /* Tilted */
+                    // wait 1000ms (10 ticks) then change again
+                    brightness_ticks++;
+                    if (brightness_ticks >= 10) {
+                        brightness_ticks = 0;
+
+                        if (signed_y < 0 && brightness_level > 0) {
+                            brightness_level--;
+                            if (is_scrolling) redraw_scroll(); else redraw_chars();
+                        } else if (signed_y > 0 && brightness_level < 14) {
+                            brightness_level++;
+                            if (is_scrolling) redraw_scroll(); else redraw_chars();
+                        }
+                    }
+                }
+            }
+            /* Next tick read X */
+            adc_channel = JOYSTICK_X_AXIS;
         }
     }
+}
+
+/* Brightness control by scailing colour value */
+static uint8_t scale_colour(uint8_t colour) {
+    uint8_t green = (colour >> 4) & 0x0F;
+    uint8_t red = colour & 0x0F;
+    /* Map brightness 0-14 to scale 1-15 */
+    uint8_t scale = brightness_level + 1;  // 1 to 15
+    green = (uint8_t)((green * scale) / 15);
+    red = (uint8_t)((red * scale) / 15);
+    return (green << 4) | red;
 }
 
 static void snap_to_present(void) {
@@ -618,12 +686,12 @@ static void redraw_chars(void) {
         /* Only draw chars that are at least partially on screen */
         if (pos + (int16_t)width > 0 && pos < (int16_t)MATRIX_NUM_COLUMNS) {
             draw_char(stored_chars[i], (uint8_t)pos,
-                      stored_colours[i], current_font_large);
+                      scale_colour(stored_colours[i]), current_font_large);
         }
     }
 
     if (has_incomplete) {
-        draw_char(stored_incomplete_char, right_edge, COLOUR_RED, current_font_large);
+        draw_char(stored_incomplete_char, right_edge, scale_colour(COLOUR_RED), current_font_large);
     }
 }
 
@@ -669,12 +737,12 @@ static void redraw_scroll(void) {
 
         if (pos + (int16_t)width > 0 && pos < MATRIX_NUM_COLUMNS) {
             draw_char(stored_chars[i], (uint8_t)pos,
-                      stored_colours[i], current_font_large);
+                      scale_colour(stored_colours[i]), current_font_large);
         }
-        /* Draw incomplete char at righ edge */
-        if (has_incomplete && scroll_offset == 0) {
-            draw_char(stored_incomplete_char, get_right_edge_col(), COLOUR_RED, current_font_large);
-        }
+    }
+    /* Draw incomplete char at righ edge */
+    if (has_incomplete && scroll_offset == 0) {
+        draw_char(stored_incomplete_char, get_right_edge_col(), scale_colour(COLOUR_RED), current_font_large);
     }
 }
 
@@ -791,7 +859,7 @@ static void trigger_submit(void) {
         if (c != '\0') {
             /* Draw new character at right edge */
             uint8_t start_col = get_right_edge_col();
-            draw_char(c, start_col, COLOUR_GREEN, current_font_large);
+            draw_char(c, start_col, scale_colour(COLOUR_GREEN), current_font_large);
 
             /* Queue left shifts */
             matrix_shifts_remaining = get_font_shift();
@@ -861,7 +929,7 @@ void handle_serial_input(void) {
 
             /* LED matrix */
             uint8_t start_col = get_right_edge_col();
-            draw_char(c, start_col, COLOUR_YELLOW, current_font_large);
+            draw_char(c, start_col, scale_colour(COLOUR_YELLOW), current_font_large);
             matrix_shifts_remaining = get_font_shift();
 
             /* Store character */

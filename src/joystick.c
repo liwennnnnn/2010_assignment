@@ -10,15 +10,17 @@ void joystick_init(void) {
     ADMUX = (1<<REFS0);
 
     /* Enable ADC, prescaler 64 (8MHz/64 = 125kHz, within 50-200kHz range) */
-    ADCSRA = (1<<ADEN) | (1<<ADPS2) | (1<<ADPS1);
+    ADCSRA = (1<<ADEN) | (1<<ADPS2) | (1<<ADPS1) | (1<<ADPS0);
+
+    /* Disable digital input on ADC pins to reduce noise */
+    DIDR0 |= (1<<ADC0D) | (1<<ADC1D);
 }
 
 void joystick_start_conversion(uint8_t channel) {
-    /* Select channel (lower 4 bits of ADMUX) */
     ADMUX = (ADMUX & 0xF0) | (channel & 0x0F);
-
-    /* Start conversion by setting ADSC bit */
-    ADCSRA |= (1<<ADSC);
+    ADCSRA |= (1<<ADSC);      // dummy conversion to settle channel
+    while (ADCSRA & (1<<ADSC)); // wait for dummy to finish
+    ADCSRA |= (1<<ADSC);      // now start the real conversion
 }
 
 uint8_t joystick_conversion_complete(void) {
@@ -28,7 +30,9 @@ uint8_t joystick_conversion_complete(void) {
 
 uint16_t joystick_get_result(void) {
     /* Read ADCL before ADCH (locks register pair) */
-    return ADC;
+    uint8_t low = ADCL;
+    uint8_t high = ADCH;
+    return (high << 8) | low;
 }
 
 int16_t joystick_get_x(void) {
