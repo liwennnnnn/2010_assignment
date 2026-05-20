@@ -26,6 +26,7 @@
 #include "ssd.h"
 #include "buzzer.h"
 #include "joystick.h"
+#include "eeprom.h"
 
 /* Beat queue */
 #define BEAT_QUEUE_SIZE 20
@@ -176,6 +177,9 @@ void initialise_hardware(void)
     // Initialise joystick
     joystick_init();
 
+    // Initialise EEPROM storage
+    eeprom_storage_init();
+
     sei(); // enable global interrupts
 
     // Initialise buttons
@@ -244,6 +248,13 @@ void start_morse(void)
     // Reset terminal track
     terminal_col = 0;
     terminal_row = 1;
+
+    /* Restore scrollback from EEPROM */
+    stored_count = eeprom_restore_chars(stored_chars, stored_colours);
+    char_displayed = stored_count;
+    if (stored_count > 0) {
+        redraw_chars(); // redraw restored chars
+    }
 
     while(1)
     {
@@ -866,6 +877,9 @@ static void trigger_submit(void) {
 
             /* Store character */
             store_character(c, COLOUR_GREEN);
+            
+            /* Stored in EEPROM */
+            eeprom_save_char(c, COLOUR_GREEN);
 
             /* Clear stored incomplete char */
             stored_incomplete_char = '\0';
@@ -934,6 +948,9 @@ void handle_serial_input(void) {
 
             /* Store character */
             store_character(c, COLOUR_YELLOW);
+
+            /* Store in EEPROM */
+            eeprom_save_char(c, COLOUR_YELLOW);
 
             /* Terminal output */
             terminal_print_char(c, TERM_YELLOW);
