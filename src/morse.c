@@ -65,6 +65,10 @@ static void update_ssd(void);
 /* Synchronous mode */
 static void handle_sync_mode(void);
 
+/* Serial Terminal */
+static void terminal_print_char(char c, const char* colour);
+static void terminal_replace_incomplete(char c, const char* colour);
+
 /* Buzzer */
 static void buzzer_queue_push(uint8_t type);
 static int8_t buzzer_queue_pop(void);
@@ -87,6 +91,9 @@ static uint8_t get_right_edge_col(void);
 static void redraw_scroll(void);
 static int8_t get_scroll_speed(int16_t joystick_x);
 static void snap_to_present(void);
+
+/* Joystick Brightness */
+static uint8_t scale_colour(uint8_t colour);
 
 /* Functions to handle inputs */
 static void trigger_dot(void);
@@ -280,40 +287,6 @@ void start_morse(void)
     // should never reach
 }
 
-/* Handle synchronous mode */
-static void handle_sync_mode(void) {
-    check_font_change();
-
-    uint8_t current_b0 = (PINB & (1<<PB0)) ? 1 : 0;
-
-    /* Detect press */
-    if (current_b0 && !sync_b0_pressed) {
-        sync_b0_pressed = 1;
-        sync_press_ticks = 0;   // start counting holder time
-        sync_release_ticks = 0; // stop counting release time
-    }
-
-    /* Detect release */
-    if (!current_b0 && sync_b0_pressed) {
-        sync_b0_pressed = 0;
-
-        /* Determine input */
-        if (sync_press_ticks < 2 ) {
-            // 200ms (DOT)
-            buttons_encode_dot();
-            trigger_dot();
-        } else {
-            // >= 200ms (DASH)
-            buttons_encode_dash();
-            trigger_dash();
-        }
-
-        sync_release_ticks = 0; // start counting release time
-        sync_submit_count = 0;  // reset submit count
-        sync_pending = 1;       // watch for submit timeout
-    }
-}
-
 /* Update IO board LEDs */
 void update_io_leds(void) {
     // Preserve PD0(TX), PD1(RX), PD6(buzzer) — mask = 0b01000011 = 0x43
@@ -337,40 +310,6 @@ void update_io_leds(void) {
     // L7 on PA4: bit 7
     if (led_history & 0x80) { PORTA |= (1<<PA4);  }
     else                     { PORTA &= ~(1<<PA4); }
-}
-
-/* Buzzer queue */
-static void buzzer_queue_push(uint8_t type) {
-    if (buzzer_queue_count < BUZZER_QUEUE_SIZE) {
-        buzzer_queue[buzzer_queue_tail] = type;
-        buzzer_queue_tail = (buzzer_queue_tail + 1) % BUZZER_QUEUE_SIZE;
-        buzzer_queue_count++;
-    }
-}
-
-static int8_t buzzer_queue_pop(void) {
-    if (buzzer_queue_count == 0) return -1;
-    uint8_t val = buzzer_queue[buzzer_queue_head];
-    buzzer_queue_head = (buzzer_queue_head + 1) % BUZZER_QUEUE_SIZE;
-    buzzer_queue_count--;
-    return val;
-}
-
-/* Beat queue */
-static void beat_queue_push(uint8_t value) {
-    if (beat_queue_count < BEAT_QUEUE_SIZE) {
-        beat_queue[beat_queue_tail] = value;
-        beat_queue_tail = (beat_queue_tail + 1) % BEAT_QUEUE_SIZE;
-        beat_queue_count++;
-    }
-}
-
-static int8_t beat_queue_pop(void) {
-    if (beat_queue_count == 0) return -1;   // empty
-    uint8_t val = beat_queue[beat_queue_head];
-    beat_queue_head = (beat_queue_head + 1) % BEAT_QUEUE_SIZE;
-    beat_queue_count--;
-    return val;
 }
 
 /* Called when timer1 fires (every 100ms)  */
@@ -534,23 +473,71 @@ static void process_animation(void) {
     }
 }
 
-/* Brightness control by scailing colour value */
-static uint8_t scale_colour(uint8_t colour) {
-    uint8_t green = (colour >> 4) & 0x0F;
-    uint8_t red = colour & 0x0F;
-    /* Map brightness 0-14 to scale 1-15 */
-    uint8_t scale = brightness_level + 1;  // 1 to 15
-    green = (uint8_t)((green * scale) / 15);
-    red = (uint8_t)((red * scale) / 15);
-    return (green << 4) | red;
+/* Flush animation */
+static void flush_matrix_animation(void) {
+    if (matrix_shifts_remaining > 0) {
+        ledmatrix_shift_left(matrix_shifts_remaining); // finish instantly
+        matrix_shifts_remaining = 0;
+
+        uint8_t blank[MATRIX_NUM_ROWS] = {0};
+        uint8_t width = get_font_width();
+        uint8_t start_col = MATRIX_NUM_COLUMNS - width;
+        for (uint8_t i = 0; i < width; i++) {
+            ledmatrix_update_column(start_col + i, blank);
+        }
+    }
 }
 
-static void snap_to_present(void) {
-    if (scroll_offset != 0) {
-        scroll_offset = 0;
-        is_scrolling = 0;
-        redraw_scroll();  // redraw at offset 0
+/* Flush buzzer queue */
+static void flush_buzzer_queue(void) {
+    buzzer_queue_head = 0;
+    buzzer_queue_tail = 0;
+    buzzer_queue_count = 0;
+    buzzer_stop();
+}
+
+/* Flush beat queue */
+static void flush_beat_queue(void) {
+    while (beat_queue_count > 0) {
+        int8_t beat = beat_queue_pop();
+        led_history = (led_history << 1) | (beat ? 1 : 0);
     }
+    update_io_leds();
+    flush_buzzer_queue();
+}
+
+/* Beat queue */
+static void beat_queue_push(uint8_t value) {
+    if (beat_queue_count < BEAT_QUEUE_SIZE) {
+        beat_queue[beat_queue_tail] = value;
+        beat_queue_tail = (beat_queue_tail + 1) % BEAT_QUEUE_SIZE;
+        beat_queue_count++;
+    }
+}
+
+static int8_t beat_queue_pop(void) {
+    if (beat_queue_count == 0) return -1;   // empty
+    uint8_t val = beat_queue[beat_queue_head];
+    beat_queue_head = (beat_queue_head + 1) % BEAT_QUEUE_SIZE;
+    beat_queue_count--;
+    return val;
+}
+
+/* Buzzer queue */
+static void buzzer_queue_push(uint8_t type) {
+    if (buzzer_queue_count < BUZZER_QUEUE_SIZE) {
+        buzzer_queue[buzzer_queue_tail] = type;
+        buzzer_queue_tail = (buzzer_queue_tail + 1) % BUZZER_QUEUE_SIZE;
+        buzzer_queue_count++;
+    }
+}
+
+static int8_t buzzer_queue_pop(void) {
+    if (buzzer_queue_count == 0) return -1;
+    uint8_t val = buzzer_queue[buzzer_queue_head];
+    buzzer_queue_head = (buzzer_queue_head + 1) % BUZZER_QUEUE_SIZE;
+    buzzer_queue_count--;
+    return val;
 }
 
 /* Update SSD */
@@ -570,6 +557,40 @@ static void update_ssd(void)
     }
 
     ssd_display(char_count, right, dp);
+}
+
+/* Handle synchronous mode */
+static void handle_sync_mode(void) {
+    check_font_change();
+
+    uint8_t current_b0 = (PINB & (1<<PB0)) ? 1 : 0;
+
+    /* Detect press */
+    if (current_b0 && !sync_b0_pressed) {
+        sync_b0_pressed = 1;
+        sync_press_ticks = 0;   // start counting holder time
+        sync_release_ticks = 0; // stop counting release time
+    }
+
+    /* Detect release */
+    if (!current_b0 && sync_b0_pressed) {
+        sync_b0_pressed = 0;
+
+        /* Determine input */
+        if (sync_press_ticks < 2 ) {
+            // 200ms (DOT)
+            buttons_encode_dot();
+            trigger_dot();
+        } else {
+            // >= 200ms (DASH)
+            buttons_encode_dash();
+            trigger_dash();
+        }
+
+        sync_release_ticks = 0; // start counting release time
+        sync_submit_count = 0;  // reset submit count
+        sync_pending = 1;       // watch for submit timeout
+    }
 }
 
 /* Serial terminal output */
@@ -605,39 +626,6 @@ static void terminal_replace_incomplete(char c, const char* colour)
     printf("%s%c%s", colour, c , TERM_RESET);
 
     terminal_col++;
-}
-
-/* Flush animation */
-static void flush_matrix_animation(void) {
-    if (matrix_shifts_remaining > 0) {
-        ledmatrix_shift_left(matrix_shifts_remaining); // finish instantly
-        matrix_shifts_remaining = 0;
-
-        uint8_t blank[MATRIX_NUM_ROWS] = {0};
-        uint8_t width = get_font_width();
-        uint8_t start_col = MATRIX_NUM_COLUMNS - width;
-        for (uint8_t i = 0; i < width; i++) {
-            ledmatrix_update_column(start_col + i, blank);
-        }
-    }
-}
-
-/* Flush buzzer queue */
-static void flush_buzzer_queue(void) {
-    buzzer_queue_head = 0;
-    buzzer_queue_tail = 0;
-    buzzer_queue_count = 0;
-    buzzer_stop();
-}
-
-/* Flush beat queue */
-static void flush_beat_queue(void) {
-    while (beat_queue_count > 0) {
-        int8_t beat = beat_queue_pop();
-        led_history = (led_history << 1) | (beat ? 1 : 0);
-    }
-    update_io_leds();
-    flush_buzzer_queue();
 }
 
 /* Font selection */
@@ -768,6 +756,25 @@ static int8_t get_scroll_speed(int16_t joystick_x) {
 
     /* Apply direction */
     return joystick_x < 0 ? -speed : speed;
+}
+
+/* Brightness control by scailing colour value */
+static uint8_t scale_colour(uint8_t colour) {
+    uint8_t green = (colour >> 4) & 0x0F;
+    uint8_t red = colour & 0x0F;
+    /* Map brightness 0-14 to scale 1-15 */
+    uint8_t scale = brightness_level + 1;  // 1 to 15
+    green = (uint8_t)((green * scale) / 15);
+    red = (uint8_t)((red * scale) / 15);
+    return (green << 4) | red;
+}
+
+static void snap_to_present(void) {
+    if (scroll_offset != 0) {
+        scroll_offset = 0;
+        is_scrolling = 0;
+        redraw_scroll();  // redraw at offset 0
+    }
 }
 
 /* Handle DOT */
