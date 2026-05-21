@@ -4,7 +4,6 @@
 
 #include <avr/io.h>
 #include "ssd.h"
-#include <util/delay.h>
 
 /* Seven segment display values */
 uint8_t seven_seg[16] = { 
